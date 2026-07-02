@@ -688,14 +688,6 @@ or the equivalent platform path.
 
 ---
 
-## License
-
-This repository contains the SteadIP client scripts and documentation.
-
-Add your license here.
-
----
-
 ## Links
 
 - Website: <https://steadip.com>
