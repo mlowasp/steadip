@@ -384,7 +384,11 @@ https://app.example.com
 
 The dashboard will show the DNS record you need to create.
 
-Usually this is a `CNAME` pointing to the SteadIP gateway hostname.
+Usually this is a `CNAME` pointing to the tunnel's random subdomain, ie;
+
+```
+app.example.com CNAME quiet-hermit-4821.steadip.com
+```
 
 ---
 
