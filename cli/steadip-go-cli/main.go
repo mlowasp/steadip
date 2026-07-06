@@ -817,7 +817,7 @@ func (m model) View() string {
 		body = header + "\n\n" + m.viewHome() + "\n\n" + subtle.Render("↑/↓ navigate • enter select • esc back • q quit")
 	case working:
 		box := activeCard.Width(minInt(86, maxInt(40, w-10))).Render(m.spin.View() + "  " + m.message)
-		body = header + "\n\n" + lipgloss.Place(contentW, contentH-4, lipgloss.Center, lipgloss.Center, box)
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-4, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg))
 	case loginScreen:
 		body = header + "\n\n" + m.viewLogin()
 	case reloginScreen:
@@ -830,16 +830,16 @@ func (m model) View() string {
 			resultBody = okStyle.Render(m.message) + "\n\n" + resultBody
 		}
 		box := activeCard.Width(minInt(96, maxInt(40, w-10))).Render(resultBody)
-		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box) + "\n\n" + subtle.Render("esc back • q quit")
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) + "\n\n" + subtle.Render("esc back • q quit")
 	case statusScreen:
 		box := activeCard.Width(minInt(92, maxInt(40, w-10))).Render(titleStyle.Render("Status") + "\n\n" + m.result)
-		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box) + "\n\n" + subtle.Render("esc back • q quit")
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) + "\n\n" + subtle.Render("esc back • q quit")
 	case logsScreen:
 		box := activeCard.Width(maxInt(60, w-10)).Height(maxInt(14, h-10)).Render(titleStyle.Render("Logs") + "\n\n" + m.result)
 		body = header + "\n\n" + box + "\n\n" + subtle.Render("esc back • q quit")
 	}
 
-	return appStyle.Width(w).Height(h).Render(body)
+	return lipgloss.NewStyle().Width(w).Height(h).Background(bg).Render(appStyle.Width(w).Height(h).Background(bg).Render(body))
 }
 
 func (m model) viewHome() string {
@@ -890,7 +890,8 @@ func (m model) viewLogin() string {
 	d := m.login
 	boxWidth := minInt(86, maxInt(44, m.width-10))
 	body := titleStyle.Render("Approve login in your browser") + "\n\nOpen:\n" + d.VerificationURI + "\n\nEnter code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" + m.spin.View() + " Waiting for authorization..."
-	return lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body))
+	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body), lipgloss.WithWhitespaceBackground(bg))
+	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
 
 func (m model) viewReloginModal() string {
@@ -920,9 +921,10 @@ func (m model) viewReloginModal() string {
 	}
 
 	body += "\n\n" + subtle.Render("enter submit • esc cancel")
-	modal := activeCard.Width(boxWidth).Padding(1, 2).Render(body)
+	modal := activeCard.Width(boxWidth).Padding(1, 2).Background(panel).Render(body)
 
-	return lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, modal)
+	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, modal, lipgloss.WithWhitespaceBackground(bg))
+	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
 
 func reloginWithCodeCmd(p Paths, code string) tea.Cmd {
