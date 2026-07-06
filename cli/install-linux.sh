@@ -53,6 +53,11 @@ main() {
   esac
 
   arch="$(detect_arch)"
+  if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux/files/usr" ]; then
+    platform="android"
+  else
+    platform="linux"
+  fi
   binary="steadip-${platform}-${arch}"
   url="${BASE_URL}/${binary}"
 

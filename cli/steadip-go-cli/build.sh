@@ -14,3 +14,6 @@ GOOS=darwin GOARCH=arm64 go build -o dist/steadip-darwin-arm64 .
 
 # Windows amd64
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/steadip-windows-amd64.exe .
+
+# Android
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -o dist/steadip-android-arm64 .
