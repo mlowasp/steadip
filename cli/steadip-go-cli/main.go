@@ -271,9 +271,6 @@ func startDeviceLogin(ctx context.Context, p Paths) (DeviceCodeResp, error) {
 	if r.ExpiresIn <= 0 {
 		r.ExpiresIn = 600
 	}
-	if r.DeviceCode == "" && r.UserCode != "" {
-		r.DeviceCode = r.UserCode
-	}
 	if r.VerificationURI == "" && r.VerificationURIComplete != "" {
 		r.VerificationURI = r.VerificationURIComplete
 	}
@@ -1200,10 +1197,7 @@ func (m model) viewLogin() string {
 	d := m.login
 	boxWidth := minInt(96, maxInt(48, m.width-10))
 	url := qrURLForDevice(*d)
-	code := d.UserCode
-	if code == "" {
-		code = d.DeviceCode
-	}
+	code := d.DeviceCode
 
 	body := titleStyle.Render("Approve login") + "\n\n" +
 		subtle.Render("Scan the QR code, or open the URL and enter the code.") + "\n\n" +
