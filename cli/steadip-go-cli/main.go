@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -41,58 +42,25 @@ type Paths struct {
 
 func paths() Paths {
 	home, _ := os.UserHomeDir()
-
 	if runtime.GOOS == "windows" {
 		local := os.Getenv("LOCALAPPDATA")
 		if local == "" {
 			local = filepath.Join(home, "AppData", "Local")
 		}
-
 		appdata := os.Getenv("APPDATA")
 		if appdata == "" {
 			appdata = filepath.Join(home, "AppData", "Roaming")
 		}
-
 		bin := filepath.Join(local, "SteadIP", "bin")
 		cfg := filepath.Join(appdata, "SteadIP")
 		state := filepath.Join(local, "SteadIP", "state")
-
-		return Paths{
-			BinDir:    bin,
-			ConfigDir: cfg,
-			StateDir:  state,
-			Frpc:      filepath.Join(bin, "frpc.exe"),
-			Token:     filepath.Join(cfg, "token"),
-			Config:    filepath.Join(cfg, "frpc.toml"),
-			Meta:      filepath.Join(cfg, "tunnels.json"),
-			PID:       filepath.Join(state, "frpc.pid"),
-			Log:       filepath.Join(state, "frpc.log"),
-		}
+		return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc.exe"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log")}
 	}
-
 	appDir := filepath.Join(home, ".local", "share", "steadip")
 	bin := filepath.Join(appDir, "bin")
 	cfg := filepath.Join(home, ".config", "steadip")
 	state := filepath.Join(home, ".local", "state", "steadip")
-
-	return Paths{
-		BinDir:      bin,
-		ConfigDir:   cfg,
-		StateDir:    state,
-		Frpc:        filepath.Join(bin, "frpc"),
-		Token:       filepath.Join(cfg, "token"),
-		Config:      filepath.Join(cfg, "frpc.toml"),
-		Meta:        filepath.Join(cfg, "tunnels.json"),
-		PID:         filepath.Join(state, "frpc.pid"),
-		Log:         filepath.Join(state, "frpc.log"),
-		ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"),
-		LaunchAgent: filepath.Join(
-			home,
-			"Library",
-			"LaunchAgents",
-			"com.steadip.client.plist",
-		),
-	}
+	return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"), ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"), LaunchAgent: filepath.Join(home, "Library", "LaunchAgents", "com.steadip.client.plist")}
 }
 
 func ensureDirs(p Paths) error {
@@ -587,6 +555,7 @@ const (
 	home screen = iota
 	working
 	loginScreen
+	reloginScreen
 	resultScreen
 	statusScreen
 	logsScreen
@@ -597,8 +566,10 @@ type model struct {
 	spin                 spinner.Model
 	screen               screen
 	cursor               int
+	width, height        int
 	message, result, err string
 	login                *DeviceCodeResp
+	reloginInput         textinput.Model
 }
 type doneMsg struct {
 	title, body string
@@ -619,12 +590,59 @@ func newModel(p Paths) model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(cyan)
-	return model{p: p, spin: s, screen: home}
+
+	ti := textinput.New()
+	ti.Placeholder = "Paste device code from SteadIP dashboard"
+	ti.CharLimit = 128
+	ti.Width = 48
+	ti.Prompt = ""
+	ti.Focus()
+
+	return model{p: p, spin: s, screen: home, width: 100, height: 32, reloginInput: ti}
 }
 func (m model) Init() tea.Cmd { return m.spin.Tick }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = v.Width
+		m.height = v.Height
+		inputWidth := v.Width - 18
+		if inputWidth > 64 {
+			inputWidth = 64
+		}
+		if inputWidth < 24 {
+			inputWidth = 24
+		}
+		m.reloginInput.Width = inputWidth
+		return m, nil
+
 	case tea.KeyMsg:
+		if m.screen == reloginScreen {
+			switch v.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "esc":
+				m.screen = home
+				m.err = ""
+				m.reloginInput.SetValue("")
+				return m, nil
+			case "enter":
+				code := strings.TrimSpace(m.reloginInput.Value())
+				if code == "" {
+					m.err = "Device code is required."
+					return m, nil
+				}
+				m.screen = working
+				m.message = "Authorizing device..."
+				m.err = ""
+				return m, reloginWithCodeCmd(m.p, code)
+			}
+
+			var cmd tea.Cmd
+			m.reloginInput, cmd = m.reloginInput.Update(v)
+			return m, cmd
+		}
+
 		switch v.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -646,10 +664,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.run(menu[m.cursor].key)
 			}
 		}
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(v)
 		return m, cmd
+
 	case doneMsg:
 		m.screen = resultScreen
 		m.message = v.title
@@ -661,6 +681,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.result = v.body
 		}
 		return m, nil
+
 	case loginCodeMsg:
 		if v.err != nil {
 			m.screen = resultScreen
@@ -672,6 +693,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = loginScreen
 		openURL(v.resp.VerificationURIComplete)
 		return m, tea.Batch(m.spin.Tick, pollLogin(m.p, v.resp))
+
 	case loginDoneMsg:
 		m.screen = resultScreen
 		m.message = "Login"
@@ -705,8 +727,13 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 		m.message = "Requesting device login..."
 		return m, loginStart(m.p)
 	case "relogin":
-		newModel, cmd := reloginCmd(m.p)
-		return newModel, cmd
+		m.screen = reloginScreen
+		m.err = ""
+		m.result = ""
+		m.message = "Relogin"
+		m.reloginInput.SetValue("")
+		m.reloginInput.Focus()
+		return m, textinput.Blink
 	case "sync":
 		return work("Sync", func() (string, error) { return "Config written:\n" + m.p.Config, syncConfig(ctx, m.p) })
 	case "up":
@@ -772,40 +799,76 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m model) View() string {
+	w, h := m.width, m.height
+	if w <= 0 {
+		w = 100
+	}
+	if h <= 0 {
+		h = 32
+	}
+
 	header := titleStyle.Render("SteadIP") + " " + subtle.Render("Free HTTP/HTTPS tunnels for local apps, webhooks, and homelabs")
+	contentW := maxInt(40, w-4)
+	contentH := maxInt(12, h-2)
+
+	var body string
 	switch m.screen {
 	case home:
-		return appStyle.Render(header + "\n\n" + m.viewHome() + "\n\n" + subtle.Render("↑/↓ navigate • enter select • esc back • q quit"))
+		body = header + "\n\n" + m.viewHome() + "\n\n" + subtle.Render("↑/↓ navigate • enter select • esc back • q quit")
 	case working:
-		return appStyle.Render(header + "\n\n" + activeCard.Width(76).Render(m.spin.View()+"  "+m.message))
+		box := activeCard.Width(minInt(86, maxInt(40, w-10))).Render(m.spin.View() + "  " + m.message)
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-4, lipgloss.Center, lipgloss.Center, box)
 	case loginScreen:
-		return appStyle.Render(header + "\n\n" + m.viewLogin())
+		body = header + "\n\n" + m.viewLogin()
+	case reloginScreen:
+		body = header + "\n\n" + m.viewReloginModal()
 	case resultScreen:
-		body := m.result
+		resultBody := m.result
 		if m.err != "" {
-			body = errStyle.Render("Error") + "\n\n" + m.err
+			resultBody = errStyle.Render("Error") + "\n\n" + m.err
 		} else {
-			body = okStyle.Render(m.message) + "\n\n" + body
+			resultBody = okStyle.Render(m.message) + "\n\n" + resultBody
 		}
-		return appStyle.Render(header + "\n\n" + activeCard.Width(90).Render(body) + "\n\n" + subtle.Render("esc back • q quit"))
+		box := activeCard.Width(minInt(96, maxInt(40, w-10))).Render(resultBody)
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box) + "\n\n" + subtle.Render("esc back • q quit")
 	case statusScreen:
-		return appStyle.Render(header + "\n\n" + activeCard.Width(78).Render(titleStyle.Render("Status")+"\n\n"+m.result) + "\n\n" + subtle.Render("esc back • q quit"))
+		box := activeCard.Width(minInt(92, maxInt(40, w-10))).Render(titleStyle.Render("Status") + "\n\n" + m.result)
+		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box) + "\n\n" + subtle.Render("esc back • q quit")
 	case logsScreen:
-		return appStyle.Render(header + "\n\n" + activeCard.Width(100).Render(titleStyle.Render("Logs")+"\n\n"+m.result) + "\n\n" + subtle.Render("esc back • q quit"))
+		box := activeCard.Width(maxInt(60, w-10)).Height(maxInt(14, h-10)).Render(titleStyle.Render("Logs") + "\n\n" + m.result)
+		body = header + "\n\n" + box + "\n\n" + subtle.Render("esc back • q quit")
 	}
-	return ""
+
+	return appStyle.Width(w).Height(h).Render(body)
 }
+
 func (m model) viewHome() string {
+	available := m.width - 8
+	if available < 82 {
+		available = 82
+	}
+
+	leftWidth := int(float64(available) * 0.62)
+	rightWidth := available - leftWidth - 4
+	if rightWidth < 30 {
+		rightWidth = 30
+	}
+	cardWidth := (leftWidth - 4) / 2
+	if cardWidth < 28 {
+		cardWidth = 28
+	}
+
 	var rows []string
 	for i, it := range menu {
-		style := card.Width(34)
+		style := card.Width(cardWidth)
 		mark := "  "
 		if i == m.cursor {
-			style = activeCard.Width(34)
+			style = activeCard.Width(cardWidth)
 			mark = "› "
 		}
 		rows = append(rows, style.Render(titleStyle.Render(mark+it.label)+"\n"+subtle.Render("  "+it.desc)))
 	}
+
 	var lines []string
 	for i := 0; i < len(rows); i += 2 {
 		if i+1 < len(rows) {
@@ -814,15 +877,81 @@ func (m model) viewHome() string {
 			lines = append(lines, rows[i])
 		}
 	}
-	side := card.Width(36).Render(titleStyle.Render("Local Status") + "\n\n" + statusMini(m.p) + "\n\n" + subtle.Render("Dashboard:\n"+dashboardURL))
+
+	sideH := maxInt(16, len(lines)*5-2)
+	side := card.Width(rightWidth).Height(sideH).Render(titleStyle.Render("Local Status") + "\n\n" + statusMini(m.p) + "\n\n" + subtle.Render("Dashboard:\n"+dashboardURL))
 	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.JoinVertical(lipgloss.Left, lines...), "  ", side)
 }
+
 func (m model) viewLogin() string {
 	if m.login == nil {
 		return ""
 	}
 	d := m.login
-	return activeCard.Width(76).Render(titleStyle.Render("Approve login in your browser") + "\n\nOpen:\n" + d.VerificationURI + "\n\nEnter code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" + m.spin.View() + " Waiting for authorization...")
+	boxWidth := minInt(86, maxInt(44, m.width-10))
+	body := titleStyle.Render("Approve login in your browser") + "\n\nOpen:\n" + d.VerificationURI + "\n\nEnter code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" + m.spin.View() + " Waiting for authorization..."
+	return lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body))
+}
+
+func (m model) viewReloginModal() string {
+	boxWidth := m.width - 12
+	if boxWidth > 78 {
+		boxWidth = 78
+	}
+	if boxWidth < 44 {
+		boxWidth = 44
+	}
+
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(cyan).
+		Background(lipgloss.Color("#050812")).
+		Foreground(lipgloss.Color("#F4F8FF")).
+		Padding(0, 1).
+		Width(boxWidth - 8).
+		Render(m.reloginInput.View())
+
+	body := titleStyle.Render("Relogin with device code") + "\n\n" +
+		subtle.Render("Paste the device code generated from the SteadIP dashboard.") + "\n\n" +
+		inputBox
+
+	if m.err != "" {
+		body += "\n\n" + errStyle.Render(m.err)
+	}
+
+	body += "\n\n" + subtle.Render("enter submit • esc cancel")
+	modal := activeCard.Width(boxWidth).Padding(1, 2).Render(body)
+
+	return lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, modal)
+}
+
+func reloginWithCodeCmd(p Paths, code string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		var tr TokenResp
+		_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{"device_code": code, "relogin": true, "client_name": "steadip-go-cli", "client_version": version, "device_name": host()}, &tr)
+		if err != nil {
+			return doneMsg{title: "Relogin", err: errors.New(apiErr(raw, err.Error()))}
+		}
+		if tr.AccessToken == "" {
+			return doneMsg{title: "Relogin", err: errors.New("no access token returned")}
+		}
+		if err := saveToken(p, tr.AccessToken); err != nil {
+			return doneMsg{title: "Relogin", err: err}
+		}
+		clearConfig(p)
+		plan := "Free"
+		if tr.UserVerified {
+			plan = "Verified"
+		}
+		email := tr.UserEmail
+		if email == "" {
+			email = "unknown"
+		}
+		return doneMsg{title: "Relogin", body: fmt.Sprintf("Relogin successful.\n\nAccount: %s\nPlan: %s\n\nRun steadip up to start this tunnel config.", email, plan)}
+	}
 }
 
 func reloginCmd(p Paths) (tea.Model, tea.Cmd) {
@@ -1048,6 +1177,20 @@ Usage:
   steadip config          Show config with secrets hidden
   steadip logout          Stop tunnels and remove token`)
 }
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func main() {
 	p := paths()
 	if err := ensureDirs(p); err != nil {
