@@ -1,55 +1,30 @@
 # SteadIP Go CLI
 
-A slick Bubble Tea + Bubbles + Lip Gloss terminal UI for SteadIP.
+Fixed build with:
 
-## Commands
-
-```bash
-steadip                 # interactive TUI
-steadip login
-steadip relogin
-steadip sync
-steadip up
-steadip down
-steadip enable
-steadip disable
-steadip status
-steadip logs
-steadip config
-steadip logout
-```
+- `steadip` opens the interactive TUI.
+- `steadip login` runs a command-line device-code login flow.
+- TUI Login displays the device code and URL correctly.
+- Device-code JSON fields use proper snake_case tags.
+- Relogin remains a TUI modal when launched from the TUI.
+- Relogin remains a CLI prompt when using `steadip relogin`.
 
 ## Build
 
 ```bash
 go mod tidy
 go build -o steadip .
+./build.sh
 ```
 
-## Cross-compile examples
+## QR code login
+
+This build adds a terminal QR code on the TUI login screen and command-line `steadip login` output. The QR is generated from `verification_uri_complete` when available, falling back to `verification_uri`.
+
+New dependency:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o dist/steadip-linux-amd64 .
-GOOS=darwin GOARCH=arm64 go build -o dist/steadip-darwin-arm64 .
-GOOS=windows GOARCH=amd64 go build -o dist/steadip-windows-amd64.exe .
+go get github.com/skip2/go-qrcode
 ```
 
-## API assumptions
-
-The client expects your existing SteadIP API:
-
-```text
-POST /api/device/code
-POST /api/device/token
-GET  /api/device/config
-```
-
-`GET /api/device/config` should return:
-
-```json
-{
-  "frp": "serverAddr = \"gw1.steadip.com\"\nserverPort = 7000\n..."
-}
-```
-
-The CLI writes the returned `frp` string directly to the local `frpc.toml`.
+The TUI only shows the QR code when the terminal is large enough; otherwise it still shows the URL and device code.

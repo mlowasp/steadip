@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 const (
@@ -322,6 +323,29 @@ func saveLoginResult(p Paths, tr TokenResp) error {
 	return saveToken(p, tr.AccessToken)
 }
 
+func qrURLForDevice(d DeviceCodeResp) string {
+	url := d.VerificationURIComplete
+	if url == "" {
+		url = d.VerificationURI
+	}
+	if url == "" {
+		url = dashboardURL
+	}
+	return url
+}
+
+func renderQRCode(url string) string {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return ""
+	}
+	qr, err := qrcode.New(url, qrcode.Medium)
+	if err != nil {
+		return ""
+	}
+	return qr.ToSmallString(false)
+}
+
 func cliLogin(p Paths) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -332,13 +356,7 @@ func cliLogin(p Paths) int {
 		return 1
 	}
 
-	url := d.VerificationURIComplete
-	if url == "" {
-		url = d.VerificationURI
-	}
-	if url == "" {
-		url = dashboardURL
-	}
+	url := qrURLForDevice(d)
 
 	fmt.Println(titleStyle.Render("SteadIP Login"))
 	fmt.Println()
@@ -348,6 +366,9 @@ func cliLogin(p Paths) int {
 	fmt.Println("Enter this code:")
 	fmt.Println(warnStyle.Render(d.DeviceCode))
 	fmt.Println()
+	if qr := renderQRCode(url); qr != "" {
+		fmt.Println(qr)
+	}
 	fmt.Println(subtle.Render("Waiting for authorization..."))
 
 	openURL(url)
@@ -1178,17 +1199,26 @@ func (m model) viewLogin() string {
 	}
 	d := m.login
 	boxWidth := minInt(96, maxInt(48, m.width-10))
-	url := d.VerificationURIComplete
-	if url == "" {
-		url = d.VerificationURI
+	url := qrURLForDevice(*d)
+	code := d.UserCode
+	if code == "" {
+		code = d.DeviceCode
 	}
-	if url == "" {
-		url = dashboardURL
-	}
-	body := titleStyle.Render("Approve login in your browser") + "\n\n" +
+
+	body := titleStyle.Render("Approve login") + "\n\n" +
+		subtle.Render("Scan the QR code, or open the URL and enter the code.") + "\n\n" +
 		"Open this URL:\n" + codeStyle.Render(url) + "\n\n" +
-		"Enter this code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" +
-		m.spin.View() + " Waiting for authorization..."
+		"Device code:\n" + warnStyle.Render(code)
+
+	if m.width >= 90 && m.height >= 32 {
+		if qr := renderQRCode(url); qr != "" {
+			body += "\n\n" + qr
+		}
+	} else {
+		body += "\n\n" + warnStyle.Render("Terminal too small for QR code. Use the URL/code above.")
+	}
+
+	body += "\n" + m.spin.View() + " Waiting for authorization..."
 	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body), lipgloss.WithWhitespaceBackground(bg))
 	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
