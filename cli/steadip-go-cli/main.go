@@ -41,24 +41,58 @@ type Paths struct {
 
 func paths() Paths {
 	home, _ := os.UserHomeDir()
+
 	if runtime.GOOS == "windows" {
 		local := os.Getenv("LOCALAPPDATA")
 		if local == "" {
 			local = filepath.Join(home, "AppData", "Local")
 		}
+
 		appdata := os.Getenv("APPDATA")
 		if appdata == "" {
 			appdata = filepath.Join(home, "AppData", "Roaming")
 		}
+
 		bin := filepath.Join(local, "SteadIP", "bin")
 		cfg := filepath.Join(appdata, "SteadIP")
 		state := filepath.Join(local, "SteadIP", "state")
-		return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc.exe"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log")}
+
+		return Paths{
+			BinDir:    bin,
+			ConfigDir: cfg,
+			StateDir:  state,
+			Frpc:      filepath.Join(bin, "frpc.exe"),
+			Token:     filepath.Join(cfg, "token"),
+			Config:    filepath.Join(cfg, "frpc.toml"),
+			Meta:      filepath.Join(cfg, "tunnels.json"),
+			PID:       filepath.Join(state, "frpc.pid"),
+			Log:       filepath.Join(state, "frpc.log"),
+		}
 	}
-	bin := filepath.Join(home, ".local", "bin")
+
+	appDir := filepath.Join(home, ".local", "share", "steadip")
+	bin := filepath.Join(appDir, "bin")
 	cfg := filepath.Join(home, ".config", "steadip")
 	state := filepath.Join(home, ".local", "state", "steadip")
-	return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"), ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"), LaunchAgent: filepath.Join(home, "Library", "LaunchAgents", "com.steadip.client.plist")}
+
+	return Paths{
+		BinDir:      bin,
+		ConfigDir:   cfg,
+		StateDir:    state,
+		Frpc:        filepath.Join(bin, "frpc"),
+		Token:       filepath.Join(cfg, "token"),
+		Config:      filepath.Join(cfg, "frpc.toml"),
+		Meta:        filepath.Join(cfg, "tunnels.json"),
+		PID:         filepath.Join(state, "frpc.pid"),
+		Log:         filepath.Join(state, "frpc.log"),
+		ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"),
+		LaunchAgent: filepath.Join(
+			home,
+			"Library",
+			"LaunchAgents",
+			"com.steadip.client.plist",
+		),
+	}
 }
 
 func ensureDirs(p Paths) error {
