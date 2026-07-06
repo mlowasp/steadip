@@ -55,7 +55,7 @@ func paths() Paths {
 		state := filepath.Join(local, "SteadIP", "state")
 		return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc.exe"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log")}
 	}
-	bin := filepath.Join(home, ".local", "bin", "steadip")
+	bin := filepath.Join(home, ".local", "bin")
 	cfg := filepath.Join(home, ".config", "steadip")
 	state := filepath.Join(home, ".local", "state", "steadip")
 	return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"), ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"), LaunchAgent: filepath.Join(home, "Library", "LaunchAgents", "com.steadip.client.plist")}
