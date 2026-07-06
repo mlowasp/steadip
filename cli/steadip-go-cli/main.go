@@ -27,10 +27,10 @@ import (
 )
 
 const (
-	version         = "0.1.0"
+	version         = "0.1.1"
 	frpVersion      = "0.61.1"
 	apiBase         = "https://steadip.com/api"
-	dashboardURL    = "https://steadip.com"
+	dashboardURL    = "https://steadip.com/dashboard"
 	windowsTaskName = "SteadIP Tunnel Client"
 )
 
@@ -42,6 +42,7 @@ type Paths struct {
 
 func paths() Paths {
 	home, _ := os.UserHomeDir()
+
 	if runtime.GOOS == "windows" {
 		local := os.Getenv("LOCALAPPDATA")
 		if local == "" {
@@ -54,18 +55,28 @@ func paths() Paths {
 		bin := filepath.Join(local, "SteadIP", "bin")
 		cfg := filepath.Join(appdata, "SteadIP")
 		state := filepath.Join(local, "SteadIP", "state")
-		return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc.exe"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log")}
+		return Paths{
+			BinDir: bin, ConfigDir: cfg, StateDir: state,
+			Frpc: filepath.Join(bin, "frpc.exe"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"),
+		}
 	}
+
 	appDir := filepath.Join(home, ".local", "share", "steadip")
 	bin := filepath.Join(appDir, "bin")
 	cfg := filepath.Join(home, ".config", "steadip")
 	state := filepath.Join(home, ".local", "state", "steadip")
-	return Paths{BinDir: bin, ConfigDir: cfg, StateDir: state, Frpc: filepath.Join(bin, "frpc"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"), ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"), LaunchAgent: filepath.Join(home, "Library", "LaunchAgents", "com.steadip.client.plist")}
+
+	return Paths{
+		BinDir: bin, ConfigDir: cfg, StateDir: state,
+		Frpc: filepath.Join(bin, "frpc"), Token: filepath.Join(cfg, "token"), Config: filepath.Join(cfg, "frpc.toml"), Meta: filepath.Join(cfg, "tunnels.json"), PID: filepath.Join(state, "frpc.pid"), Log: filepath.Join(state, "frpc.log"),
+		ServiceFile: filepath.Join(home, ".config", "systemd", "user", "steadip.service"),
+		LaunchAgent: filepath.Join(home, "Library", "LaunchAgents", "com.steadip.client.plist"),
+	}
 }
 
 func ensureDirs(p Paths) error {
 	for _, d := range []string{p.BinDir, p.ConfigDir, p.StateDir} {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
@@ -81,6 +92,7 @@ var (
 	bg         = lipgloss.Color("#070B14")
 	panel      = lipgloss.Color("#0D1322")
 	border     = lipgloss.Color("#1F2A44")
+	white      = lipgloss.Color("#F4F8FF")
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(cyan)
 	subtle     = lipgloss.NewStyle().Foreground(muted)
 	appStyle   = lipgloss.NewStyle().Padding(1, 2).Background(bg)
@@ -89,12 +101,18 @@ var (
 	okStyle    = lipgloss.NewStyle().Bold(true).Foreground(green)
 	errStyle   = lipgloss.NewStyle().Bold(true).Foreground(red)
 	warnStyle  = lipgloss.NewStyle().Bold(true).Foreground(yellow)
+	codeStyle  = lipgloss.NewStyle().Foreground(white).Background(lipgloss.Color("#050812")).Padding(0, 1)
 )
 
 type DeviceCodeResp struct {
-	DeviceCode, UserCode, VerificationURI, VerificationURIComplete string
-	Interval, ExpiresIn                                            int
+	DeviceCode              string `json:"device_code"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+	Interval                int    `json:"interval"`
+	ExpiresIn               int    `json:"expires_in"`
 }
+
 type TokenResp struct {
 	AccessToken  string `json:"access_token"`
 	UserEmail    string `json:"user_email"`
@@ -102,15 +120,23 @@ type TokenResp struct {
 	Error        string `json:"error"`
 	Message      string `json:"message"`
 }
+
 type ConfigResp struct {
 	FRP     string          `json:"frp"`
 	Tunnels json.RawMessage `json:"tunnels,omitempty"`
 }
-type APIError struct{ Error, Message string }
+
+type APIError struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
 
 func postJSON(ctx context.Context, path, token string, payload any, out any) (int, []byte, error) {
-	b, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", apiBase+path, bytes.NewReader(b))
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+path, bytes.NewReader(b))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -119,6 +145,7 @@ func postJSON(ctx context.Context, path, token string, payload any, out any) (in
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -135,7 +162,7 @@ func postJSON(ctx context.Context, path, token string, payload any, out any) (in
 }
 
 func getJSON(ctx context.Context, path, token string, out any) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -189,10 +216,12 @@ func token(p Paths) (string, error) {
 	}
 	return strings.TrimSpace(string(b)), nil
 }
+
 func saveToken(p Paths, t string) error {
-	_ = os.MkdirAll(p.ConfigDir, 0700)
-	return os.WriteFile(p.Token, []byte(t), 0600)
+	_ = os.MkdirAll(p.ConfigDir, 0o700)
+	return os.WriteFile(p.Token, []byte(t), 0o600)
 }
+
 func requireToken(p Paths) (string, error) {
 	t, err := token(p)
 	if err != nil || t == "" {
@@ -200,7 +229,11 @@ func requireToken(p Paths) (string, error) {
 	}
 	return t, nil
 }
-func clearConfig(p Paths) { _ = os.Remove(p.Config); _ = os.Remove(p.Meta) }
+
+func clearConfig(p Paths) {
+	_ = os.Remove(p.Config)
+	_ = os.Remove(p.Meta)
+}
 
 func syncConfig(ctx context.Context, p Paths) error {
 	t, err := requireToken(p)
@@ -215,10 +248,184 @@ func syncConfig(ctx context.Context, p Paths) error {
 	if strings.TrimSpace(cfg.FRP) == "" {
 		return errors.New("no frp config returned by SteadIP API")
 	}
-	if err := os.WriteFile(p.Meta, raw, 0600); err != nil {
+	if err := os.WriteFile(p.Meta, raw, 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(p.Config, []byte(cfg.FRP), 0600)
+	return os.WriteFile(p.Config, []byte(cfg.FRP), 0o600)
+}
+
+func startDeviceLogin(ctx context.Context, p Paths) (DeviceCodeResp, error) {
+	var r DeviceCodeResp
+	_, raw, err := postJSON(ctx, "/device/code", "", map[string]any{
+		"client_name":    "steadip-go-cli",
+		"client_version": version,
+		"device_name":    host(),
+	}, &r)
+	if err != nil {
+		return r, errors.New(apiErr(raw, err.Error()))
+	}
+	if r.Interval <= 0 {
+		r.Interval = 5
+	}
+	if r.ExpiresIn <= 0 {
+		r.ExpiresIn = 600
+	}
+	if r.DeviceCode == "" && r.UserCode != "" {
+		r.DeviceCode = r.UserCode
+	}
+	if r.VerificationURI == "" && r.VerificationURIComplete != "" {
+		r.VerificationURI = r.VerificationURIComplete
+	}
+	if r.DeviceCode == "" {
+		return r, errors.New("SteadIP API did not return device_code")
+	}
+	return r, nil
+}
+
+func pollDeviceLogin(ctx context.Context, d DeviceCodeResp) (TokenResp, error) {
+	interval := time.Duration(d.Interval) * time.Second
+	deadline := time.Now().Add(time.Duration(d.ExpiresIn) * time.Second)
+	var lastErr string
+
+	for time.Now().Before(deadline) {
+		time.Sleep(interval)
+		var tr TokenResp
+		_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{
+			"device_code": d.DeviceCode,
+			"user_code":   d.UserCode,
+		}, &tr)
+		if err == nil && tr.AccessToken != "" {
+			return tr, nil
+		}
+		msg := apiErr(raw, "")
+		switch msg {
+		case "authorization_pending", "":
+			continue
+		case "slow_down":
+			interval += 5 * time.Second
+			continue
+		default:
+			lastErr = msg
+			return TokenResp{}, errors.New(msg)
+		}
+	}
+	if lastErr != "" {
+		return TokenResp{}, errors.New(lastErr)
+	}
+	return TokenResp{}, errors.New("login expired")
+}
+
+func saveLoginResult(p Paths, tr TokenResp) error {
+	if tr.AccessToken == "" {
+		return errors.New("no access token returned")
+	}
+	return saveToken(p, tr.AccessToken)
+}
+
+func cliLogin(p Paths) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := startDeviceLogin(ctx, p)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+
+	url := d.VerificationURIComplete
+	if url == "" {
+		url = d.VerificationURI
+	}
+	if url == "" {
+		url = dashboardURL
+	}
+
+	fmt.Println(titleStyle.Render("SteadIP Login"))
+	fmt.Println()
+	fmt.Println("Open this URL:")
+	fmt.Println(codeStyle.Render(url))
+	fmt.Println()
+	fmt.Println("Enter this code:")
+	fmt.Println(warnStyle.Render(d.DeviceCode))
+	fmt.Println()
+	fmt.Println(subtle.Render("Waiting for authorization..."))
+
+	openURL(url)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+				fmt.Print(".")
+			}
+		}
+	}()
+
+	tr, err := pollDeviceLogin(ctx, d)
+	cancel()
+	<-done
+	fmt.Println()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+	if err := saveLoginResult(p, tr); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+	plan := "Free"
+	if tr.UserVerified {
+		plan = "Verified"
+	}
+	fmt.Println(okStyle.Render("Logged in successfully."))
+	if tr.UserEmail != "" {
+		fmt.Println("Account:", tr.UserEmail)
+	}
+	fmt.Println("Plan:", plan)
+	fmt.Println()
+	fmt.Println("Next:")
+	fmt.Println("  steadip up")
+	return 0
+}
+
+func cliRelogin(p Paths) int {
+	fmt.Print("Enter device code from SteadIP dashboard: ")
+	r := bufio.NewReader(os.Stdin)
+	code, _ := r.ReadString('\n')
+	code = strings.TrimSpace(code)
+	if code == "" {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), "device code is required")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	var tr TokenResp
+	_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{
+		"device_code":    code,
+		"relogin":        true,
+		"client_name":    "steadip-go-cli",
+		"client_version": version,
+		"device_name":    host(),
+	}, &tr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), apiErr(raw, err.Error()))
+		return 1
+	}
+	if err := saveLoginResult(p, tr); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+	clearConfig(p)
+	fmt.Println(okStyle.Render("Relogin successful."))
+	fmt.Println("Next:")
+	fmt.Println("  steadip up")
+	return 0
 }
 
 func frpOS() (string, error) {
@@ -228,6 +435,7 @@ func frpOS() (string, error) {
 	}
 	return "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 }
+
 func frpArch() (string, error) {
 	switch runtime.GOARCH {
 	case "amd64":
@@ -258,7 +466,10 @@ func installFrpc(ctx context.Context, p Paths) error {
 	}
 	name := fmt.Sprintf("frp_%s_%s_%s%s", frpVersion, osn, arch, ext)
 	url := fmt.Sprintf("https://github.com/fatedier/frp/releases/download/v%s/%s", frpVersion, name)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -273,9 +484,10 @@ func installFrpc(ctx context.Context, p Paths) error {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	tmp.Close()
+	_ = tmp.Close()
 	if runtime.GOOS == "windows" {
 		return extractZip(tmp.Name(), p.Frpc)
 	}
@@ -302,59 +514,56 @@ func extractTarGz(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		if filepath.Base(h.Name) == "frpc" {
-			_ = os.MkdirAll(filepath.Dir(dst), 0755)
-			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+		if filepath.Base(h.Name) == "frpc" && h.Typeflag == tar.TypeReg {
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(out, tr)
-			cerr := out.Close()
-			if err != nil {
-				return err
+			_, copyErr := io.Copy(out, tr)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return copyErr
 			}
-			return cerr
+			return closeErr
 		}
 	}
 	return errors.New("frpc not found in archive")
 }
+
 func extractZip(src, dst string) error {
-	z, err := zip.OpenReader(src)
+	zr, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
-	defer z.Close()
-	for _, f := range z.File {
+	defer zr.Close()
+	for _, f := range zr.File {
 		if filepath.Base(f.Name) == "frpc.exe" {
 			rc, err := f.Open()
 			if err != nil {
 				return err
 			}
 			defer rc.Close()
-			_ = os.MkdirAll(filepath.Dir(dst), 0755)
-			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0755)
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(out, rc)
-			cerr := out.Close()
-			if err != nil {
-				return err
+			_, copyErr := io.Copy(out, rc)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return copyErr
 			}
-			return cerr
+			return closeErr
 		}
 	}
 	return errors.New("frpc.exe not found in archive")
 }
 
-func readPID(p Paths) int {
-	b, err := os.ReadFile(p.PID)
-	if err != nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-	return n
-}
 func pidRunning(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -372,21 +581,32 @@ func pidRunning(pid int) bool {
 		return err == nil && proc != nil
 	}
 }
+
+func readPID(p Paths) int {
+	b, err := os.ReadFile(p.PID)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return n
+}
+
 func manualRunning(p Paths) bool { return pidRunning(readPID(p)) }
+
 func stopManual(p Paths) {
 	pid := readPID(p)
-	if pid > 0 {
-		if runtime.GOOS == "windows" {
-			_ = exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf("Stop-Process -Id %d -Force -ErrorAction SilentlyContinue", pid)).Run()
-		} else {
-			proc, err := os.FindProcess(pid)
-			if err == nil && proc != nil {
-				_ = proc.Kill()
-			}
-		}
+	if pid <= 0 {
+		_ = os.Remove(p.PID)
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf("Stop-Process -Id %d -Force -ErrorAction SilentlyContinue", pid)).Run()
+	} else if proc, err := os.FindProcess(pid); err == nil && proc != nil {
+		_ = proc.Kill()
 	}
 	_ = os.Remove(p.PID)
 }
+
 func startManual(p Paths) error {
 	if _, err := os.Stat(p.Frpc); err != nil {
 		return fmt.Errorf("frpc is missing: %s", p.Frpc)
@@ -395,23 +615,41 @@ func startManual(p Paths) error {
 		return errors.New("no frpc config found; run steadip sync")
 	}
 	stopManual(p)
-	logf, err := os.OpenFile(p.Log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	logFile, err := os.OpenFile(p.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(p.Frpc, "-c", p.Config)
-	cmd.Stdout = logf
-	cmd.Stderr = logf
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
 		return err
 	}
-	_ = os.WriteFile(p.PID, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
-	go func() { _ = cmd.Wait(); _ = logf.Close() }()
+	if err := os.WriteFile(p.PID, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		_ = logFile.Close()
+		return err
+	}
+	go func() { _ = cmd.Wait(); _ = logFile.Close() }()
 	time.Sleep(time.Second)
 	if !manualRunning(p) {
 		return fmt.Errorf("frpc failed to start; check logs: %s", p.Log)
 	}
 	return nil
+}
+
+func autoEnabled(p Paths) bool {
+	switch runtime.GOOS {
+	case "linux":
+		return exec.Command("systemctl", "--user", "is-enabled", "--quiet", "steadip.service").Run() == nil
+	case "darwin":
+		_, err := os.Stat(p.LaunchAgent)
+		return err == nil
+	case "windows":
+		out, _ := exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf(`$t=Get-ScheduledTask -TaskName "%s" -ErrorAction SilentlyContinue; if ($t) { "yes" }`, windowsTaskName)).Output()
+		return strings.TrimSpace(string(out)) == "yes"
+	}
+	return false
 }
 
 func daemonActive(p Paths) bool {
@@ -426,19 +664,7 @@ func daemonActive(p Paths) bool {
 	}
 	return false
 }
-func autoEnabled(p Paths) bool {
-	switch runtime.GOOS {
-	case "linux":
-		return exec.Command("systemctl", "--user", "is-enabled", "--quiet", "steadip.service").Run() == nil
-	case "darwin":
-		_, err := os.Stat(p.LaunchAgent)
-		return err == nil
-	case "windows":
-		out, _ := exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf(`$t=Get-ScheduledTask -TaskName "%s" -ErrorAction SilentlyContinue; if ($t) { "yes" }`, windowsTaskName)).Output()
-		return strings.TrimSpace(string(out)) == "yes"
-	}
-	return false
-}
+
 func stopDaemon(p Paths) {
 	switch runtime.GOOS {
 	case "linux":
@@ -449,39 +675,64 @@ func stopDaemon(p Paths) {
 		_ = exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf(`Stop-ScheduledTask -TaskName "%s" -ErrorAction SilentlyContinue`, windowsTaskName)).Run()
 	}
 }
+
 func restartDaemon(p Paths) error {
-	stopDaemon(p)
 	switch runtime.GOOS {
 	case "linux":
-		return exec.Command("systemctl", "--user", "start", "steadip.service").Run()
+		return exec.Command("systemctl", "--user", "restart", "steadip.service").Run()
 	case "darwin":
+		_ = exec.Command("launchctl", "unload", p.LaunchAgent).Run()
 		return exec.Command("launchctl", "load", p.LaunchAgent).Run()
 	case "windows":
+		stopDaemon(p)
 		return exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf(`Start-ScheduledTask -TaskName "%s"`, windowsTaskName)).Run()
 	}
 	return nil
 }
 
 func enableAuto(p Paths) error {
-	if _, err := requireToken(p); err != nil {
+	exe, err := os.Executable()
+	if err != nil {
 		return err
 	}
-	exe, _ := os.Executable()
 	switch runtime.GOOS {
 	case "linux":
-		_ = os.MkdirAll(filepath.Dir(p.ServiceFile), 0755)
-		svc := fmt.Sprintf("[Unit]\nDescription=SteadIP Tunnel Client\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=%s daemon\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n", exe)
-		if err := os.WriteFile(p.ServiceFile, []byte(svc), 0644); err != nil {
+		_ = os.MkdirAll(filepath.Dir(p.ServiceFile), 0o755)
+		service := fmt.Sprintf(`[Unit]
+Description=SteadIP Tunnel Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, exe)
+		if err := os.WriteFile(p.ServiceFile, []byte(service), 0o644); err != nil {
 			return err
 		}
-		_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+		if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+			return err
+		}
 		return exec.Command("systemctl", "--user", "enable", "--now", "steadip.service").Run()
 	case "darwin":
-		_ = os.MkdirAll(filepath.Dir(p.LaunchAgent), 0755)
+		_ = os.MkdirAll(filepath.Dir(p.LaunchAgent), 0o755)
 		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>com.steadip.client</string><key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>%s</string><key>StandardErrorPath</key><string>%s</string></dict></plist>`, exe, filepath.Join(p.StateDir, "launchd.log"), filepath.Join(p.StateDir, "launchd.err.log"))
-		if err := os.WriteFile(p.LaunchAgent, []byte(plist), 0644); err != nil {
+<plist version="1.0"><dict>
+<key>Label</key><string>com.steadip.client</string>
+<key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>%s</string>
+<key>StandardErrorPath</key><string>%s</string>
+</dict></plist>
+`, exe, filepath.Join(p.StateDir, "launchd.log"), filepath.Join(p.StateDir, "launchd.err.log"))
+		if err := os.WriteFile(p.LaunchAgent, []byte(plist), 0o644); err != nil {
 			return err
 		}
 		_ = exec.Command("launchctl", "unload", p.LaunchAgent).Run()
@@ -492,6 +743,7 @@ func enableAuto(p Paths) error {
 	}
 	return errors.New("unsupported OS")
 }
+
 func disableAuto(p Paths) {
 	switch runtime.GOOS {
 	case "linux":
@@ -503,49 +755,6 @@ func disableAuto(p Paths) {
 		_ = os.Remove(p.LaunchAgent)
 	case "windows":
 		_ = exec.Command("powershell.exe", "-NoProfile", "-Command", fmt.Sprintf(`Stop-ScheduledTask -TaskName "%s" -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName "%s" -Confirm:$false -ErrorAction SilentlyContinue`, windowsTaskName, windowsTaskName)).Run()
-	}
-}
-
-func loginStart(p Paths) tea.Cmd {
-	return func() tea.Msg {
-		ctx, _ := context.WithTimeout(context.Background(), 20*time.Second)
-		var r DeviceCodeResp
-		_, raw, err := postJSON(ctx, "/device/code", "", map[string]any{"client_name": "steadip-go-cli", "client_version": version, "device_name": host()}, &r)
-		if err != nil {
-			return loginCodeMsg{err: errors.New(apiErr(raw, err.Error()))}
-		}
-		if r.Interval <= 0 {
-			r.Interval = 5
-		}
-		if r.ExpiresIn <= 0 {
-			r.ExpiresIn = 600
-		}
-		return loginCodeMsg{resp: r}
-	}
-}
-func pollLogin(p Paths, d DeviceCodeResp) tea.Cmd {
-	return func() tea.Msg {
-		interval := time.Duration(d.Interval) * time.Second
-		deadline := time.Now().Add(time.Duration(d.ExpiresIn) * time.Second)
-		for time.Now().Before(deadline) {
-			time.Sleep(interval)
-			ctx, _ := context.WithTimeout(context.Background(), 20*time.Second)
-			var tr TokenResp
-			_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{"device_code": d.DeviceCode, "user_code": d.UserCode}, &tr)
-			if err == nil && tr.AccessToken != "" {
-				return loginDoneMsg{resp: tr}
-			}
-			msg := apiErr(raw, "")
-			if msg == "authorization_pending" || msg == "" {
-				continue
-			}
-			if msg == "slow_down" {
-				interval += 5 * time.Second
-				continue
-			}
-			return loginDoneMsg{err: errors.New(msg)}
-		}
-		return loginDoneMsg{err: errors.New("login expired")}
 	}
 }
 
@@ -571,20 +780,35 @@ type model struct {
 	login                *DeviceCodeResp
 	reloginInput         textinput.Model
 }
+
 type doneMsg struct {
 	title, body string
 	err         error
 }
+
 type loginCodeMsg struct {
 	resp DeviceCodeResp
 	err  error
 }
+
 type loginDoneMsg struct {
 	resp TokenResp
 	err  error
 }
 
-var menu = []struct{ key, label, desc string }{{"login", "Login", "Browser/device-code login"}, {"relogin", "Relogin", "Use webapp device code"}, {"sync", "Sync", "Fetch dashboard config"}, {"up", "Up", "Start tunnels"}, {"down", "Down", "Stop tunnels"}, {"enable", "Enable", "Auto-start daemon"}, {"disable", "Disable", "Remove auto-start"}, {"status", "Status", "Current tunnel status"}, {"logs", "Logs", "Recent frpc logs"}, {"config", "Config", "Show frpc config"}, {"logout", "Logout", "Remove local token"}}
+var menu = []struct{ key, label, desc string }{
+	{"login", "Login", "Browser/device-code login"},
+	{"relogin", "Relogin", "Use webapp device code"},
+	{"sync", "Sync", "Fetch dashboard config"},
+	{"up", "Up", "Start tunnels"},
+	{"down", "Down", "Stop tunnels"},
+	{"enable", "Enable", "Auto-start daemon"},
+	{"disable", "Disable", "Remove auto-start"},
+	{"status", "Status", "Current tunnel status"},
+	{"logs", "Logs", "Recent frpc logs"},
+	{"config", "Config", "Show frpc config"},
+	{"logout", "Logout", "Remove local token"},
+}
 
 func newModel(p Paths) model {
 	s := spinner.New()
@@ -600,7 +824,64 @@ func newModel(p Paths) model {
 
 	return model{p: p, spin: s, screen: home, width: 100, height: 32, reloginInput: ti}
 }
+
 func (m model) Init() tea.Cmd { return m.spin.Tick }
+
+func loginStart(p Paths) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		r, err := startDeviceLogin(ctx, p)
+		if err != nil {
+			return loginCodeMsg{err: err}
+		}
+		return loginCodeMsg{resp: r}
+	}
+}
+
+func pollLogin(p Paths, d DeviceCodeResp) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		tr, err := pollDeviceLogin(ctx, d)
+		if err != nil {
+			return loginDoneMsg{err: err}
+		}
+		return loginDoneMsg{resp: tr}
+	}
+}
+
+func reloginWithCodeCmd(p Paths, code string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		var tr TokenResp
+		_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{
+			"device_code":    code,
+			"relogin":        true,
+			"client_name":    "steadip-go-cli",
+			"client_version": version,
+			"device_name":    host(),
+		}, &tr)
+		if err != nil {
+			return doneMsg{title: "Relogin", err: errors.New(apiErr(raw, err.Error()))}
+		}
+		if err := saveLoginResult(p, tr); err != nil {
+			return doneMsg{title: "Relogin", err: err}
+		}
+		clearConfig(p)
+		plan := "Free"
+		if tr.UserVerified {
+			plan = "Verified"
+		}
+		email := tr.UserEmail
+		if email == "" {
+			email = "unknown"
+		}
+		return doneMsg{title: "Relogin", body: fmt.Sprintf("Relogin successful.\n\nAccount: %s\nPlan: %s\n\nRun steadip up to start this tunnel config.", email, plan)}
+	}
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -637,7 +918,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = ""
 				return m, reloginWithCodeCmd(m.p, code)
 			}
-
 			var cmd tea.Cmd
 			m.reloginInput, cmd = m.reloginInput.Update(v)
 			return m, cmd
@@ -691,7 +971,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.login = &v.resp
 		m.screen = loginScreen
-		openURL(v.resp.VerificationURIComplete)
+		url := v.resp.VerificationURIComplete
+		if url == "" {
+			url = v.resp.VerificationURI
+		}
+		openURL(url)
 		return m, tea.Batch(m.spin.Tick, pollLogin(m.p, v.resp))
 
 	case loginDoneMsg:
@@ -701,7 +985,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = v.err.Error()
 			return m, nil
 		}
-		if err := saveToken(m.p, v.resp.AccessToken); err != nil {
+		if err := saveLoginResult(m.p, v.resp); err != nil {
 			m.err = err.Error()
 			return m, nil
 		}
@@ -709,11 +993,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.resp.UserVerified {
 			plan = "Verified"
 		}
-		m.result = fmt.Sprintf("Logged in successfully.\n\nAccount: %s\nPlan: %s\n\nConfigure tunnels in dashboard:\n%s\n\nThen run steadip up.", v.resp.UserEmail, plan, dashboardURL)
+		email := v.resp.UserEmail
+		if email == "" {
+			email = "unknown"
+		}
+		m.result = fmt.Sprintf("Logged in successfully.\n\nAccount: %s\nPlan: %s\n\nConfigure tunnels in dashboard:\n%s\n\nThen run steadip up.", email, plan, dashboardURL)
 		return m, nil
 	}
 	return m, nil
 }
+
 func (m model) run(key string) (tea.Model, tea.Cmd) {
 	ctx := context.Background()
 	work := func(title string, fn func() (string, error)) (tea.Model, tea.Cmd) {
@@ -798,6 +1087,7 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
+
 func (m model) View() string {
 	w, h := m.width, m.height
 	if w <= 0 {
@@ -847,7 +1137,6 @@ func (m model) viewHome() string {
 	if available < 82 {
 		available = 82
 	}
-
 	leftWidth := int(float64(available) * 0.62)
 	rightWidth := available - leftWidth - 4
 	if rightWidth < 30 {
@@ -888,8 +1177,18 @@ func (m model) viewLogin() string {
 		return ""
 	}
 	d := m.login
-	boxWidth := minInt(86, maxInt(44, m.width-10))
-	body := titleStyle.Render("Approve login in your browser") + "\n\nOpen:\n" + d.VerificationURI + "\n\nEnter code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" + m.spin.View() + " Waiting for authorization..."
+	boxWidth := minInt(96, maxInt(48, m.width-10))
+	url := d.VerificationURIComplete
+	if url == "" {
+		url = d.VerificationURI
+	}
+	if url == "" {
+		url = dashboardURL
+	}
+	body := titleStyle.Render("Approve login in your browser") + "\n\n" +
+		"Open this URL:\n" + codeStyle.Render(url) + "\n\n" +
+		"Enter this code:\n" + warnStyle.Render(d.DeviceCode) + "\n\n" +
+		m.spin.View() + " Waiting for authorization..."
 	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body), lipgloss.WithWhitespaceBackground(bg))
 	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
@@ -902,91 +1201,24 @@ func (m model) viewReloginModal() string {
 	if boxWidth < 44 {
 		boxWidth = 44
 	}
-
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(cyan).
 		Background(lipgloss.Color("#050812")).
-		Foreground(lipgloss.Color("#F4F8FF")).
+		Foreground(white).
 		Padding(0, 1).
 		Width(boxWidth - 8).
 		Render(m.reloginInput.View())
-
 	body := titleStyle.Render("Relogin with device code") + "\n\n" +
 		subtle.Render("Paste the device code generated from the SteadIP dashboard.") + "\n\n" +
 		inputBox
-
 	if m.err != "" {
 		body += "\n\n" + errStyle.Render(m.err)
 	}
-
 	body += "\n\n" + subtle.Render("enter submit • esc cancel")
 	modal := activeCard.Width(boxWidth).Padding(1, 2).Background(panel).Render(body)
-
 	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, modal, lipgloss.WithWhitespaceBackground(bg))
 	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
-}
-
-func reloginWithCodeCmd(p Paths, code string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		var tr TokenResp
-		_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{"device_code": code, "relogin": true, "client_name": "steadip-go-cli", "client_version": version, "device_name": host()}, &tr)
-		if err != nil {
-			return doneMsg{title: "Relogin", err: errors.New(apiErr(raw, err.Error()))}
-		}
-		if tr.AccessToken == "" {
-			return doneMsg{title: "Relogin", err: errors.New("no access token returned")}
-		}
-		if err := saveToken(p, tr.AccessToken); err != nil {
-			return doneMsg{title: "Relogin", err: err}
-		}
-		clearConfig(p)
-		plan := "Free"
-		if tr.UserVerified {
-			plan = "Verified"
-		}
-		email := tr.UserEmail
-		if email == "" {
-			email = "unknown"
-		}
-		return doneMsg{title: "Relogin", body: fmt.Sprintf("Relogin successful.\n\nAccount: %s\nPlan: %s\n\nRun steadip up to start this tunnel config.", email, plan)}
-	}
-}
-
-func reloginCmd(p Paths) (tea.Model, tea.Cmd) {
-	fmt.Print("Enter device code from SteadIP webapp: ")
-	r := bufio.NewReader(os.Stdin)
-	code, _ := r.ReadString('\n')
-	code = strings.TrimSpace(code)
-	m := newModel(p)
-	m.screen = working
-	m.message = "Relogin"
-	return m, func() tea.Msg {
-		if code == "" {
-			return doneMsg{title: "Relogin", err: errors.New("device code is required")}
-		}
-		ctx, _ := context.WithTimeout(context.Background(), 20*time.Second)
-		var tr TokenResp
-		_, raw, err := postJSON(ctx, "/device/token", "", map[string]any{"device_code": code, "relogin": true, "client_name": "steadip-go-cli", "client_version": version, "device_name": host()}, &tr)
-		if err != nil {
-			return doneMsg{title: "Relogin", err: errors.New(apiErr(raw, err.Error()))}
-		}
-		if tr.AccessToken == "" {
-			return doneMsg{title: "Relogin", err: errors.New("no access token returned")}
-		}
-		if err := saveToken(p, tr.AccessToken); err != nil {
-			return doneMsg{title: "Relogin", err: err}
-		}
-		clearConfig(p)
-		plan := "Free"
-		if tr.UserVerified {
-			plan = "Verified"
-		}
-		return doneMsg{title: "Relogin", body: fmt.Sprintf("Relogin successful.\n\nAccount: %s\nPlan: %s\n\nRun steadip up to start this tunnel config.", tr.UserEmail, plan)}
-	}
 }
 
 func statusMini(p Paths) string {
@@ -1008,9 +1240,11 @@ func statusMini(p Paths) string {
 	}
 	return fmt.Sprintf("Logged in: %s\nManual tunnel: %s\nAuto-start: %s\nDaemon: %s", logged, man, auto, daemon)
 }
+
 func statusText(p Paths) string {
-	return statusMini(p) + "\n\nConfig: " + p.Config + "\nLogs:   " + p.Log + "\nfrpc:   " + p.Frpc
+	return statusMini(p) + "\n\nDashboard: " + dashboardURL + "\nConfig:    " + p.Config + "\nLogs:      " + p.Log + "\nfrpc:      " + p.Frpc
 }
+
 func openURL(url string) {
 	if url == "" {
 		return
@@ -1024,6 +1258,7 @@ func openURL(url string) {
 		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	}
 }
+
 func host() string {
 	h, _ := os.Hostname()
 	if h == "" {
@@ -1031,6 +1266,7 @@ func host() string {
 	}
 	return h
 }
+
 func lastLines(path string, n int) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -1042,6 +1278,7 @@ func lastLines(path string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
 func scrub(s string) string {
 	var out []string
 	sc := bufio.NewScanner(strings.NewReader(s))
@@ -1062,23 +1299,12 @@ func nonInteractive(args []string, p Paths) int {
 	ctx := context.Background()
 	fail := func(e error) int { fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), e); return 1 }
 	ok := func(s string) int { fmt.Println(okStyle.Render(s)); return 0 }
+
 	switch args[0] {
 	case "login":
-		_, err := tea.NewProgram(newModel(p)).Run()
-		if err != nil {
-			return fail(err)
-		}
-		return 0
+		return cliLogin(p)
 	case "relogin":
-		_, cmd := reloginCmd(p)
-		msg := cmd()
-		if d, okm := msg.(doneMsg); okm {
-			if d.err != nil {
-				return fail(d.err)
-			}
-			fmt.Println(d.body)
-		}
-		return 0
+		return cliRelogin(p)
 	case "sync":
 		if err := syncConfig(ctx, p); err != nil {
 			return fail(err)
@@ -1095,7 +1321,7 @@ func nonInteractive(args []string, p Paths) int {
 			if err := restartDaemon(p); err != nil {
 				return fail(err)
 			}
-			return ok("Daemon restarted")
+			return ok("Daemon restarted with latest config")
 		}
 		if err := startManual(p); err != nil {
 			return fail(err)
@@ -1122,12 +1348,12 @@ func nonInteractive(args []string, p Paths) int {
 		fmt.Println(statusText(p))
 		return 0
 	case "logs":
-		fmt.Println(lastLines(p.Log, 120))
+		fmt.Print(lastLines(p.Log, 120))
 		return 0
 	case "config":
-		b, e := os.ReadFile(p.Config)
-		if e != nil {
-			return fail(e)
+		b, err := os.ReadFile(p.Config)
+		if err != nil {
+			return fail(err)
 		}
 		fmt.Println(scrub(string(b)))
 		return 0
@@ -1146,39 +1372,42 @@ func nonInteractive(args []string, p Paths) int {
 		if err := syncConfig(ctx, p); err != nil {
 			return fail(err)
 		}
-		c := exec.Command(p.Frpc, "-c", p.Config)
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
+		cmd := exec.Command(p.Frpc, "-c", p.Config)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
 			return fail(err)
 		}
 		return 0
 	case "help", "-h", "--help":
-		help()
+		printHelp()
 		return 0
 	default:
-		fmt.Println("Unknown command:", args[0])
-		help()
+		fmt.Fprintln(os.Stderr, "Unknown command:", args[0])
+		printHelp()
 		return 1
 	}
 }
-func help() {
+
+func printHelp() {
 	fmt.Println(`SteadIP CLI
 
 Usage:
   steadip                 Open interactive TUI
-  steadip login           Browser/device-code login
-  steadip relogin         Use a webapp-generated device code
+  steadip login           Command-line device-code login
+  steadip relogin         Command-line relogin with dashboard code
   steadip sync            Fetch dashboard tunnel config
   steadip up              Sync and start tunnels
   steadip down            Stop tunnels
   steadip enable          Enable auto-start
   steadip disable         Disable auto-start
-  steadip status          Current tunnel status
-  steadip logs            Recent frpc logs
-  steadip config          Show config with secrets hidden
-  steadip logout          Stop tunnels and remove token`)
+  steadip status          Show current tunnel status
+  steadip logs            Show recent frpc logs
+  steadip config          Show frpc config with secrets hidden
+  steadip logout          Stop tunnels and remove local token
+`)
 }
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
