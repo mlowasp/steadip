@@ -1197,12 +1197,11 @@ func (m model) viewLogin() string {
 	d := m.login
 	boxWidth := minInt(96, maxInt(48, m.width-10))
 	url := qrURLForDevice(*d)
-	code := d.DeviceCode
 
 	body := titleStyle.Render("Approve login") + "\n\n" +
 		subtle.Render("Scan the QR code, or open the URL and enter the code.") + "\n\n" +
 		"Open this URL:\n" + codeStyle.Render(url) + "\n\n" +
-		"Device code:\n" + warnStyle.Render(code)
+		"Device code:\n" + warnStyle.Render(d.DeviceCode)
 
 	if m.width >= 90 && m.height >= 32 {
 		if qr := renderQRCode(url); qr != "" {
