@@ -799,6 +799,7 @@ type model struct {
 	message, result, err string
 	login                *DeviceCodeResp
 	reloginInput         textinput.Model
+	launchMonitor        bool
 }
 
 type doneMsg struct {
@@ -826,6 +827,7 @@ var menu = []struct{ key, label, desc, shortcut, section string }{
 	{"disable", "Disable", "Remove auto-start",              "a", ""},
 	{"status",  "Status",  "View connection status",         "t", "Info"},
 	{"logs",    "Logs",    "Tail recent frpc logs",           "g", ""},
+	{"monitor", "Monitor", "Live tunnel monitor TUI",        "m", ""},
 	{"config",  "Config",  "Inspect frpc config",            "c", ""},
 	{"logout",  "Logout",  "Stop tunnels & sign out",        "o", "Account"},
 }
@@ -1109,6 +1111,9 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 			m.result = "No logs yet."
 		}
 		return m, nil
+	case "monitor":
+		m.launchMonitor = true
+		return m, tea.Quit
 	case "config":
 		return work("Config", func() (string, error) {
 			b, e := os.ReadFile(m.p.Config)
@@ -1410,6 +1415,578 @@ func scrub(s string) string {
 	return strings.Join(out, "\n")
 }
 
+// ─── Monitor ─────────────────────────────────────────────────────────────────
+
+type MonitorTunnel struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Domain  string `json:"subdomain"`
+	LastPing string `json:"last_ping_timestamp"`
+	Latency int // avg of access log latencies, computed in fetch
+}
+
+type TrafficData struct {
+	Daily   float64 `json:"daily"`
+	Monthly float64 `json:"monthly"`
+}
+
+type LogEntry struct {
+	Data         string `json:"data"`
+	CreationTime string `json:"creation_time"`
+	Latency      string `json:"latency"`
+}
+
+type LogsData struct {
+	Access []LogEntry `json:"access"`
+	Error  []LogEntry `json:"error"`
+}
+
+type monitorSnap struct {
+	tunnels    []MonitorTunnel
+	daily      float64
+	monthly    float64
+	accessLogs []LogEntry
+	frpcLogs   []LogEntry
+	email      string
+	region     string
+}
+
+type monitorModel struct {
+	p              Paths
+	tok            string
+	width          int
+	height         int
+	snap           monitorSnap
+	loading        bool
+	err            string
+	spin           spinner.Model
+	lastAt         time.Time
+	frpcConn       bool
+	focusedPane    int // 0 = access logs, 1 = error logs
+	accessScrollUp int
+	frpcScrollUp   int
+}
+
+type monitorRefreshMsg struct {
+	snap monitorSnap
+	err  error
+}
+
+type monitorTickMsg struct{}
+
+func newMonitorModel(p Paths, tok string) monitorModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(cyan)
+	return monitorModel{
+		p:        p,
+		tok:      tok,
+		spin:     s,
+		loading:  true,
+		width:    100,
+		height:   40,
+		frpcConn: manualRunning(p) || daemonActive(p),
+	}
+}
+
+func (m monitorModel) Init() tea.Cmd {
+	return tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok))
+}
+
+func doMonitorFetch(p Paths, tok string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		var cfgExt struct {
+			FRP     string          `json:"frp"`
+			Tunnels json.RawMessage `json:"tunnels,omitempty"`
+			Email   string          `json:"email,omitempty"`
+			Region  string          `json:"region,omitempty"`
+		}
+		_, raw, err := getJSON(ctx, "/device/config", tok, &cfgExt)
+		if err != nil {
+			return monitorRefreshMsg{err: errors.New(apiErr(raw, err.Error()))}
+		}
+
+		var tunnels []MonitorTunnel
+		if cfgExt.Tunnels != nil {
+			_ = json.Unmarshal(cfgExt.Tunnels, &tunnels)
+		}
+
+		var totalDaily, totalMonthly float64
+		var allAccess, allError []LogEntry
+
+		for i, t := range tunnels {
+			var tr TrafficData
+			if _, _, e := getJSON(ctx, "/device/traffic?tunnel_id="+t.ID, tok, &tr); e == nil {
+				totalDaily += tr.Daily
+				totalMonthly += tr.Monthly
+			}
+			var logs LogsData
+			if _, _, e := getJSON(ctx, "/device/logs?tunnel_id="+t.ID, tok, &logs); e == nil {
+				allAccess = append(allAccess, logs.Access...)
+				allError = append(allError, logs.Error...)
+				var sum, count int
+				for _, entry := range logs.Access {
+					if v, err := strconv.Atoi(strings.TrimSpace(entry.Latency)); err == nil && v > 0 {
+						sum += v
+						count++
+					}
+				}
+				if count > 0 {
+					tunnels[i].Latency = sum / count
+				}
+			}
+		}
+
+		return monitorRefreshMsg{snap: monitorSnap{
+			tunnels:    tunnels,
+			daily:      totalDaily,
+			monthly:    totalMonthly,
+			accessLogs: allAccess,
+			frpcLogs:   allError,
+			email:      cfgExt.Email,
+			region:     cfgExt.Region,
+		}}
+	}
+}
+
+func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch v := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = v.Width, v.Height
+	case tea.KeyMsg:
+		switch v.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "r":
+			m.loading = true
+			return m, doMonitorFetch(m.p, m.tok)
+		case "tab":
+			m.focusedPane = 1 - m.focusedPane
+		case "up", "k":
+			if m.focusedPane == 0 {
+				maxUp := len(m.snap.accessLogs) - 1
+				if maxUp < 0 {
+					maxUp = 0
+				}
+				if m.accessScrollUp < maxUp {
+					m.accessScrollUp++
+				}
+			} else {
+				maxUp := len(m.snap.frpcLogs) - 1
+				if maxUp < 0 {
+					maxUp = 0
+				}
+				if m.frpcScrollUp < maxUp {
+					m.frpcScrollUp++
+				}
+			}
+		case "down", "j":
+			if m.focusedPane == 0 && m.accessScrollUp > 0 {
+				m.accessScrollUp--
+			} else if m.focusedPane == 1 && m.frpcScrollUp > 0 {
+				m.frpcScrollUp--
+			}
+		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(v)
+		return m, cmd
+	case monitorTickMsg:
+		m.loading = true
+		return m, doMonitorFetch(m.p, m.tok)
+	case monitorRefreshMsg:
+		m.loading = false
+		if v.err != nil {
+			m.err = v.err.Error()
+		} else {
+			m.snap = v.snap
+			m.err = ""
+			m.lastAt = time.Now()
+			m.frpcConn = manualRunning(m.p) || daemonActive(m.p)
+		}
+		return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return monitorTickMsg{} })
+	}
+	return m, nil
+}
+
+// mPad right-pads s to n visible columns (ANSI-aware).
+func mPad(s string, n int) string {
+	vis := lipgloss.Width(s)
+	if vis >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-vis)
+}
+
+// mTrunc truncates s to n runes, adding ellipsis if needed.
+func mTrunc(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func mTop(w int, label string) string {
+	n := w - 5 - lipgloss.Width(label)
+	if n < 1 {
+		n = 1
+	}
+	return "┌─ " + label + " " + strings.Repeat("─", n) + "┐"
+}
+
+func mSep(w int, label string) string {
+	n := w - 5 - lipgloss.Width(label)
+	if n < 1 {
+		n = 1
+	}
+	return "├─ " + label + " " + strings.Repeat("─", n) + "┤"
+}
+
+func mRow(w int, content string) string {
+	vis := lipgloss.Width(content)
+	pad := w - 4 - vis
+	if pad < 0 {
+		pad = 0
+	}
+	return "│ " + content + strings.Repeat(" ", pad) + " │"
+}
+
+// mSepPane is like mSep but highlights the label in cyan when focused.
+func mSepPane(w int, label string, focused bool) string {
+	n := w - 5 - lipgloss.Width(label)
+	if n < 1 {
+		n = 1
+	}
+	renderedLabel := label
+	if focused {
+		renderedLabel = lipgloss.NewStyle().Foreground(cyan).Bold(true).Render(label)
+	}
+	return "├─ " + renderedLabel + " " + strings.Repeat("─", n) + "┤"
+}
+
+func mBot(w int) string {
+	return "└" + strings.Repeat("─", w-2) + "┘"
+}
+
+// mRowSB is like mRow but reserves the last interior column for a scrollbar char.
+func mRowSB(w int, content, sbChar string) string {
+	vis := lipgloss.Width(content)
+	pad := w - 4 - vis
+	if pad < 0 {
+		pad = 0
+	}
+	return "│ " + content + strings.Repeat(" ", pad) + sbChar + "│"
+}
+
+// makeScrollbar returns `visible` single-char strings representing a scrollbar.
+// scrollUp = 0 means showing the bottom (newest); higher = scrolled toward oldest.
+func makeScrollbar(total, visible, scrollUp int) []string {
+	track := lipgloss.NewStyle().Foreground(dimText).Render("░")
+	thumb := lipgloss.NewStyle().Foreground(muted).Render("█")
+	bar := make([]string, visible)
+	for i := range bar {
+		bar[i] = " "
+	}
+	if total <= visible {
+		return bar
+	}
+	maxUp := total - visible
+	thumbH := visible * visible / total
+	if thumbH < 1 {
+		thumbH = 1
+	}
+	trackH := visible - thumbH
+	thumbTop := trackH
+	if maxUp > 0 {
+		thumbTop = trackH - scrollUp*trackH/maxUp
+	}
+	if thumbTop < 0 {
+		thumbTop = 0
+	}
+	if thumbTop > trackH {
+		thumbTop = trackH
+	}
+	for i := range bar {
+		if i >= thumbTop && i < thumbTop+thumbH {
+			bar[i] = thumb
+		} else {
+			bar[i] = track
+		}
+	}
+	return bar
+}
+
+func fmtLogTime(s string) string {
+	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
+		return time.Unix(n, 0).Format("15:04:05")
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04:05.999999999Z07:00",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Format("15:04:05")
+		}
+	}
+	return s
+}
+
+func fmtLogEntry(e LogEntry, maxWidth int) string {
+	ts := fmtLogTime(e.CreationTime)
+	data := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, e.Data)
+	return mTrunc(ts+"  "+data, maxWidth)
+}
+
+func fmtBytes(b float64) string {
+	switch {
+	case b >= 1e12:
+		return fmt.Sprintf("%.1f TB", b/1e12)
+	case b >= 1e9:
+		return fmt.Sprintf("%.1f GB", b/1e9)
+	case b >= 1e6:
+		return fmt.Sprintf("%.1f MB", b/1e6)
+	case b >= 1e3:
+		return fmt.Sprintf("%.1f KB", b/1e3)
+	default:
+		return fmt.Sprintf("%.0f B", b)
+	}
+}
+
+func (m monitorModel) View() string {
+	w := m.width
+	if w < 60 {
+		w = 60
+	}
+	if w > 220 {
+		w = 220
+	}
+	contentW := w - 4
+
+	whiteB := lipgloss.NewStyle().Foreground(white).Bold(true)
+
+	var out []string
+
+	// Title bar
+	out = append(out, mTop(w, "SteadIP Tunnel Monitor"))
+
+	// Info / header row
+	email := m.snap.email
+	if email == "" {
+		email = "–"
+	}
+	region := m.snap.region
+	if region == "" {
+		region = "–"
+	}
+	connTxt := lipgloss.NewStyle().Foreground(red).Render("● disconnected")
+	if m.frpcConn {
+		connTxt = lipgloss.NewStyle().Foreground(green).Render("● connected")
+	}
+	loadTxt := ""
+	if m.loading {
+		loadTxt = "  " + m.spin.View()
+	}
+	infoRow := subtle.Render("User: ") + lipgloss.NewStyle().Foreground(white).Render(email) +
+		"   " + subtle.Render("Region: ") + lipgloss.NewStyle().Foreground(white).Render(region) +
+		"   " + subtle.Render("frpc: ") + connTxt + loadTxt
+	out = append(out, mRow(w, infoRow))
+
+	// Tunnels section
+	out = append(out, mSep(w, "TUNNELS"))
+
+	const (
+		nameW   = 18
+		typeW   = 6
+		statusW = 10
+		latW    = 8
+	)
+	// 4 spaces separate the 5 columns
+	domainW := contentW - nameW - typeW - statusW - latW - 4
+	if domainW < 10 {
+		domainW = 10
+	}
+
+	colHdr := mPad(subtle.Render("NAME"), nameW) + " " +
+		mPad(subtle.Render("TYPE"), typeW) + " " +
+		mPad(subtle.Render("DOMAIN"), domainW) + " " +
+		mPad(subtle.Render("STATUS"), statusW) + " " +
+		subtle.Render("LATENCY")
+	out = append(out, mRow(w, colHdr))
+
+	if len(m.snap.tunnels) == 0 {
+		out = append(out, mRow(w, subtle.Render("  no tunnels found")))
+	}
+	for _, t := range m.snap.tunnels {
+		ts, _ := strconv.ParseInt(strings.TrimSpace(t.LastPing), 10, 64)
+		isUp := ts > 0 && time.Now().Unix()-ts <= 30
+		st := "OFFLINE"
+		if isUp {
+			st = "ONLINE"
+		}
+		stColor := lipgloss.Color("#F87171")
+		if isUp {
+			stColor = lipgloss.Color("#4ADE80")
+		}
+		dotSt := lipgloss.NewStyle().Foreground(stColor).Render("●")
+		stSt := lipgloss.NewStyle().Foreground(stColor).Bold(true).Render(st)
+
+		lat := "-"
+		if t.Latency > 0 {
+			lat = fmt.Sprintf("%dms", t.Latency)
+		}
+
+		row := mPad(mTrunc(t.Name, nameW-1), nameW) + " " +
+			mPad(mTrunc(t.Type, typeW-1), typeW) + " " +
+			mPad(mTrunc(t.Domain+".steadip.com", domainW-1), domainW) + " " +
+			mPad(dotSt+" "+stSt, statusW) + " " +
+			lat
+		out = append(out, mRow(w, row))
+	}
+
+	// Traffic section
+	out = append(out, mSep(w, "TRAFFIC"))
+	trafficRow := subtle.Render("Today: ") + whiteB.Render(fmtBytes(m.snap.daily)) +
+		"      " +
+		subtle.Render("Month: ") + whiteB.Render(fmtBytes(m.snap.monthly))
+	out = append(out, mRow(w, trafficRow))
+
+	// Use the actual line count so far to compute remaining space exactly.
+	// Still to emit: ACCESS_SEP(1) + access rows + FRPC_SEP(1) + frpc rows + BOTTOM(1) + FOOTER(1) = 4 + rows
+	h := m.height
+	if h < 10 {
+		h = 10
+	}
+	remaining := h - len(out) - 4
+	if remaining < 2 {
+		remaining = 2
+	}
+	maxAccessLines := remaining / 2
+	maxFrpcLines := remaining - maxAccessLines
+
+	// Access logs – scroll-aware with scrollbar
+	aAll := m.snap.accessLogs
+	aTotal := len(aAll)
+	aScrollUp := m.accessScrollUp
+	aMaxUp := aTotal - maxAccessLines
+	if aMaxUp < 0 {
+		aMaxUp = 0
+	}
+	if aScrollUp > aMaxUp {
+		aScrollUp = aMaxUp
+	}
+	aStart := aTotal - maxAccessLines - aScrollUp
+	if aStart < 0 {
+		aStart = 0
+	}
+	aEnd := aTotal - aScrollUp
+	if aEnd < 0 {
+		aEnd = 0
+	}
+	aVisible := aAll[aStart:aEnd]
+	aSB := makeScrollbar(aTotal, maxAccessLines, aScrollUp)
+
+	aLabel := "ACCESS LOGS"
+	if aScrollUp > 0 {
+		aLabel += fmt.Sprintf(" [↑%d]", aScrollUp)
+	}
+	out = append(out, mSepPane(w, aLabel, m.focusedPane == 0))
+	for i := 0; i < maxAccessLines; i++ {
+		sb := aSB[i]
+		switch {
+		case len(aVisible) == 0 && i == 0:
+			out = append(out, mRowSB(w, subtle.Render("  no access logs"), sb))
+		case i < len(aVisible):
+			out = append(out, mRowSB(w, fmtLogEntry(aVisible[i], contentW-2), sb))
+		default:
+			out = append(out, mRowSB(w, "", sb))
+		}
+	}
+
+	// Error logs – scroll-aware with scrollbar
+	fAll := m.snap.frpcLogs
+	fTotal := len(fAll)
+	fScrollUp := m.frpcScrollUp
+	fMaxUp := fTotal - maxFrpcLines
+	if fMaxUp < 0 {
+		fMaxUp = 0
+	}
+	if fScrollUp > fMaxUp {
+		fScrollUp = fMaxUp
+	}
+	fStart := fTotal - maxFrpcLines - fScrollUp
+	if fStart < 0 {
+		fStart = 0
+	}
+	fEnd := fTotal - fScrollUp
+	if fEnd < 0 {
+		fEnd = 0
+	}
+	fVisible := fAll[fStart:fEnd]
+	fSB := makeScrollbar(fTotal, maxFrpcLines, fScrollUp)
+
+	fLabel := "ERROR LOGS"
+	if fScrollUp > 0 {
+		fLabel += fmt.Sprintf(" [↑%d]", fScrollUp)
+	}
+	out = append(out, mSepPane(w, fLabel, m.focusedPane == 1))
+	for i := 0; i < maxFrpcLines; i++ {
+		sb := fSB[i]
+		switch {
+		case len(fVisible) == 0 && i == 0:
+			out = append(out, mRowSB(w, subtle.Render("  no error logs"), sb))
+		case i < len(fVisible):
+			out = append(out, mRowSB(w, subtle.Render(fmtLogEntry(fVisible[i], contentW-2)), sb))
+		default:
+			out = append(out, mRowSB(w, "", sb))
+		}
+	}
+
+	// Bottom border
+	out = append(out, mBot(w))
+
+	// Footer
+	refreshInfo := ""
+	if !m.lastAt.IsZero() {
+		refreshInfo = "  refreshed " + m.lastAt.Format("15:04:05")
+	}
+	if m.err != "" {
+		refreshInfo = "  " + errStyle.Render(m.err)
+	}
+	paneNames := [2]string{"ACCESS LOGS", "ERROR LOGS"}
+	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    ↑↓ · scroll ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
+
+	return lipgloss.NewStyle().Background(bg).Width(w).Render(strings.Join(out, "\n"))
+}
+
+func cliMonitor(p Paths) int {
+	tok, err := requireToken(p)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+	prog := tea.NewProgram(newMonitorModel(p, tok), tea.WithAltScreen())
+	if _, err := prog.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
 func nonInteractive(args []string, p Paths) int {
 	ctx := context.Background()
 	fail := func(e error) int { fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), e); return 1 }
@@ -1465,6 +2042,8 @@ func nonInteractive(args []string, p Paths) int {
 	case "logs":
 		fmt.Print(lastLines(p.Log, 120))
 		return 0
+	case "monitor":
+		return cliMonitor(p)
 	case "config":
 		b, err := os.ReadFile(p.Config)
 		if err != nil {
@@ -1518,6 +2097,7 @@ Usage:
   steadip disable         Disable auto-start
   steadip status          Show current tunnel status
   steadip logs            Show recent frpc logs
+  steadip monitor         Live tunnel monitor TUI
   steadip config          Show frpc config with secrets hidden
   steadip logout          Stop tunnels and remove local token
 `)
@@ -1546,8 +2126,12 @@ func main() {
 	if len(os.Args) > 1 {
 		os.Exit(nonInteractive(os.Args[1:], p))
 	}
-	if _, err := tea.NewProgram(newModel(p), tea.WithAltScreen()).Run(); err != nil {
+	final, err := tea.NewProgram(newModel(p), tea.WithAltScreen()).Run()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if tm, ok := final.(model); ok && tm.launchMonitor {
+		os.Exit(cliMonitor(p))
 	}
 }
