@@ -31,7 +31,7 @@ const (
 	version         = "0.1.1"
 	frpVersion      = "0.61.1"
 	apiBase         = "https://steadip.com/api"
-	dashboardURL    = "https://steadip.com/dashboard"
+	dashboardURL    = "https://steadip.com"
 	windowsTaskName = "SteadIP Tunnel Client"
 )
 
@@ -85,24 +85,26 @@ func ensureDirs(p Paths) error {
 }
 
 var (
-	cyan       = lipgloss.Color("#5FFFD7")
-	green      = lipgloss.Color("#8CFF8C")
-	red        = lipgloss.Color("#FF6B6B")
-	yellow     = lipgloss.Color("#FFD166")
-	muted      = lipgloss.Color("#7D8DA1")
-	bg         = lipgloss.Color("#070B14")
-	panel      = lipgloss.Color("#0D1322")
-	border     = lipgloss.Color("#1F2A44")
-	white      = lipgloss.Color("#F4F8FF")
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(cyan)
-	subtle     = lipgloss.NewStyle().Foreground(muted)
-	appStyle   = lipgloss.NewStyle().Padding(1, 2).Background(bg)
-	card       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Background(panel).Padding(1, 2)
-	activeCard = card.Copy().BorderForeground(cyan)
-	okStyle    = lipgloss.NewStyle().Bold(true).Foreground(green)
-	errStyle   = lipgloss.NewStyle().Bold(true).Foreground(red)
-	warnStyle  = lipgloss.NewStyle().Bold(true).Foreground(yellow)
-	codeStyle  = lipgloss.NewStyle().Foreground(white).Background(lipgloss.Color("#050812")).Padding(0, 1)
+	cyan    = lipgloss.Color("#5FFFD7")
+	green   = lipgloss.Color("#4ADE80")
+	red     = lipgloss.Color("#F87171")
+	yellow  = lipgloss.Color("#FBBF24")
+	muted   = lipgloss.Color("#8B9AAD")
+	bg      = lipgloss.Color("#070B14")
+	panel   = lipgloss.Color("#0D1322")
+	border  = lipgloss.Color("#1F2A44")
+	white   = lipgloss.Color("#F4F8FF")
+	dimText = lipgloss.Color("#3A4F6E")
+
+	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(cyan)
+	subtle           = lipgloss.NewStyle().Foreground(muted)
+	appStyle         = lipgloss.NewStyle().Padding(1, 2).Background(bg)
+	okStyle          = lipgloss.NewStyle().Bold(true).Foreground(green)
+	errStyle         = lipgloss.NewStyle().Bold(true).Foreground(red)
+	warnStyle        = lipgloss.NewStyle().Bold(true).Foreground(yellow)
+	codeStyle        = lipgloss.NewStyle().Foreground(white).Background(lipgloss.Color("#050812")).Padding(0, 1)
+	panelStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Background(panel).Padding(1, 2)
+	activePanelStyle = panelStyle.Copy().BorderForeground(cyan)
 )
 
 type DeviceCodeResp struct {
@@ -814,18 +816,34 @@ type loginDoneMsg struct {
 	err  error
 }
 
-var menu = []struct{ key, label, desc string }{
-	{"login", "Login", "Browser/device-code login"},
-	{"relogin", "Relogin", "Use webapp device code"},
-	{"sync", "Sync", "Fetch dashboard config"},
-	{"up", "Up", "Start tunnels"},
-	{"down", "Down", "Stop tunnels"},
-	{"enable", "Enable", "Auto-start daemon"},
-	{"disable", "Disable", "Remove auto-start"},
-	{"status", "Status", "Current tunnel status"},
-	{"logs", "Logs", "Recent frpc logs"},
-	{"config", "Config", "Show frpc config"},
-	{"logout", "Logout", "Remove local token"},
+var menu = []struct{ key, label, desc, shortcut, section string }{
+	{"login",   "Login",   "Authenticate via browser",       "l", "Auth"},
+	{"relogin", "Relogin", "Reuse a dashboard device code",  "r", ""},
+	{"sync",    "Sync",    "Pull config from dashboard",     "s", "Tunnel"},
+	{"up",      "Up",      "Install, sync & start",          "u", ""},
+	{"down",    "Down",    "Stop running tunnels",            "d", ""},
+	{"enable",  "Enable",  "Enable auto-start daemon",       "e", "System"},
+	{"disable", "Disable", "Remove auto-start",              "a", ""},
+	{"status",  "Status",  "View connection status",         "t", "Info"},
+	{"logs",    "Logs",    "Tail recent frpc logs",           "g", ""},
+	{"config",  "Config",  "Inspect frpc config",            "c", ""},
+	{"logout",  "Logout",  "Stop tunnels & sign out",        "o", "Account"},
+}
+
+func boolStr(b bool, yes, no string) string {
+	if b {
+		return yes
+	}
+	return no
+}
+
+func menuIndexByShortcut(sc string) int {
+	for i, it := range menu {
+		if it.shortcut == sc {
+			return i
+		}
+	}
+	return -1
 }
 
 func newModel(p Paths) model {
@@ -960,6 +978,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.screen == home {
 				return m.run(menu[m.cursor].key)
+			}
+		default:
+			if m.screen == home {
+				if idx := menuIndexByShortcut(v.String()); idx >= 0 {
+					m.cursor = idx
+					return m.run(menu[idx].key)
+				}
 			}
 		}
 
@@ -1115,79 +1140,114 @@ func (m model) View() string {
 		h = 32
 	}
 
-	header := titleStyle.Render("SteadIP") + " " + subtle.Render("Free HTTP/HTTPS tunnels for local apps, webhooks, and homelabs")
+	logo := lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("STEADIP")
+	sep := lipgloss.NewStyle().Foreground(dimText).Render("  ·  ")
+	tagline := subtle.Render("Free HTTP/HTTPS tunnels for local apps, webhooks & homelabs")
+	divW := w - 4
+	if divW < 0 {
+		divW = 0
+	}
+	if divW > 200 {
+		divW = 200
+	}
+	divider := lipgloss.NewStyle().Foreground(dimText).Render(strings.Repeat("─", divW))
+	header := logo + sep + tagline + "\n" + divider
+
 	contentW := maxInt(40, w-4)
-	contentH := maxInt(12, h-2)
+	contentH := maxInt(12, h-6)
 
 	var body string
 	switch m.screen {
 	case home:
-		body = header + "\n\n" + m.viewHome() + "\n\n" + subtle.Render("↑/↓ navigate • enter select • esc back • q quit")
+		footer := subtle.Render("↑↓/jk · navigate    enter · select    q · quit")
+		body = header + "\n\n" + m.viewHome() + "\n\n" + footer
 	case working:
-		box := activeCard.Width(minInt(86, maxInt(40, w-10))).Render(m.spin.View() + "  " + m.message)
+		content := m.spin.View() + "  " + lipgloss.NewStyle().Foreground(white).Render(m.message)
+		box := activePanelStyle.Width(minInt(74, maxInt(30, w-14))).Render(content)
 		body = header + "\n\n" + lipgloss.Place(contentW, contentH-4, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg))
 	case loginScreen:
 		body = header + "\n\n" + m.viewLogin()
 	case reloginScreen:
 		body = header + "\n\n" + m.viewReloginModal()
 	case resultScreen:
-		resultBody := m.result
+		var resultBody string
 		if m.err != "" {
-			resultBody = errStyle.Render("Error") + "\n\n" + m.err
+			resultBody = errStyle.Render("✕  "+m.message) + "\n\n" + lipgloss.NewStyle().Foreground(white).Render(m.err)
 		} else {
-			resultBody = okStyle.Render(m.message) + "\n\n" + resultBody
+			resultBody = okStyle.Render("✓  "+m.message) + "\n\n" + lipgloss.NewStyle().Foreground(white).Render(m.result)
 		}
-		box := activeCard.Width(minInt(96, maxInt(40, w-10))).Render(resultBody)
-		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) + "\n\n" + subtle.Render("esc back • q quit")
+		box := activePanelStyle.Width(minInt(86, maxInt(34, w-12))).Render(resultBody)
+		body = header + "\n\n" +
+			lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) +
+			"\n\n" + subtle.Render("esc · back    q · quit")
 	case statusScreen:
-		box := activeCard.Width(minInt(92, maxInt(40, w-10))).Render(titleStyle.Render("Status") + "\n\n" + m.result)
-		body = header + "\n\n" + lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) + "\n\n" + subtle.Render("esc back • q quit")
+		box := activePanelStyle.Width(minInt(82, maxInt(34, w-12))).Render(
+			titleStyle.Render("Status") + "\n\n" + m.result,
+		)
+		body = header + "\n\n" +
+			lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) +
+			"\n\n" + subtle.Render("esc · back    q · quit")
 	case logsScreen:
-		box := activeCard.Width(maxInt(60, w-10)).Height(maxInt(14, h-10)).Render(titleStyle.Render("Logs") + "\n\n" + m.result)
-		body = header + "\n\n" + box + "\n\n" + subtle.Render("esc back • q quit")
+		box := activePanelStyle.Width(maxInt(54, w-12)).Height(maxInt(12, h-10)).Render(
+			titleStyle.Render("Logs") + "\n\n" + m.result,
+		)
+		body = header + "\n\n" + box + "\n\n" + subtle.Render("esc · back    q · quit")
 	}
 
-	return lipgloss.NewStyle().Width(w).Height(h).Background(bg).Render(appStyle.Width(w).Height(h).Background(bg).Render(body))
+	return lipgloss.NewStyle().Width(w).Height(h).Background(bg).Render(
+		appStyle.Width(w).Height(h).Background(bg).Render(body),
+	)
 }
 
 func (m model) viewHome() string {
 	available := m.width - 8
-	if available < 82 {
-		available = 82
+	if available < 84 {
+		available = 84
 	}
-	leftWidth := int(float64(available) * 0.62)
-	rightWidth := available - leftWidth - 4
-	if rightWidth < 30 {
-		rightWidth = 30
+	statusW := 32
+	if available > 120 {
+		statusW = 38
 	}
-	cardWidth := (leftWidth - 4) / 2
-	if cardWidth < 28 {
-		cardWidth = 28
-	}
+	menuW := available - statusW - 4
 
-	var rows []string
+	sectionSt := lipgloss.NewStyle().Foreground(dimText).Bold(true)
+	cursorSt := lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	scSt := lipgloss.NewStyle().Foreground(yellow)
+	scSelSt := lipgloss.NewStyle().Foreground(yellow).Bold(true)
+	labelSt := lipgloss.NewStyle().Foreground(white)
+	labelSelSt := lipgloss.NewStyle().Foreground(cyan).Bold(true)
+
+	var menuLines []string
 	for i, it := range menu {
-		style := card.Width(cardWidth)
-		mark := "  "
+		if it.section != "" {
+			if i > 0 {
+				menuLines = append(menuLines, "")
+			}
+			menuLines = append(menuLines, sectionSt.Render("  "+strings.ToUpper(it.section)))
+		}
+
+		sc := "[" + it.shortcut + "]"
+		label := fmt.Sprintf("%-9s", it.label)
+
 		if i == m.cursor {
-			style = activeCard.Width(cardWidth)
-			mark = "› "
-		}
-		rows = append(rows, style.Render(titleStyle.Render(mark+it.label)+"\n"+subtle.Render("  "+it.desc)))
-	}
-
-	var lines []string
-	for i := 0; i < len(rows); i += 2 {
-		if i+1 < len(rows) {
-			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, rows[i], "  ", rows[i+1]))
+			line := " " + cursorSt.Render("▶") + " " + scSelSt.Render(sc) + " " + labelSelSt.Render(label) + "  " + subtle.Render(it.desc)
+			menuLines = append(menuLines, line)
 		} else {
-			lines = append(lines, rows[i])
+			line := "   " + scSt.Render(sc) + " " + labelSt.Render(label) + "  " + lipgloss.NewStyle().Foreground(dimText).Render(it.desc)
+			menuLines = append(menuLines, line)
 		}
 	}
 
-	sideH := maxInt(16, len(lines)*5-2)
-	side := card.Width(rightWidth).Height(sideH).Render(titleStyle.Render("Local Status") + "\n\n" + statusMini(m.p) + "\n\n" + subtle.Render("Dashboard:\n"+dashboardURL))
-	return lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.JoinVertical(lipgloss.Left, lines...), "  ", side)
+	leftPanel := panelStyle.Width(menuW - 6).Render(strings.Join(menuLines, "\n"))
+
+	divLine := lipgloss.NewStyle().Foreground(dimText).Render(strings.Repeat("─", statusW-10))
+	statusContent := titleStyle.Render("Status") + "\n\n" + statusMini(m.p) +
+		"\n\n" + divLine +
+		"\n" + subtle.Render("Dashboard") +
+		"\n" + lipgloss.NewStyle().Foreground(cyan).Render(dashboardURL)
+	rightPanel := panelStyle.Width(statusW - 6).Render(statusContent)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, "  ", rightPanel)
 }
 
 func (m model) viewLogin() string {
@@ -1195,31 +1255,36 @@ func (m model) viewLogin() string {
 		return ""
 	}
 	d := m.login
-	boxWidth := minInt(96, maxInt(48, m.width-10))
+	boxWidth := minInt(88, maxInt(48, m.width-12))
 	url := qrURLForDevice(*d)
 
-	body := titleStyle.Render("Approve login") + "\n\n" +
-		subtle.Render("Scan the QR code, or open the URL and enter the code.") + "\n\n" +
-		"Open this URL:\n" + codeStyle.Render(url) + "\n\n" +
-		"Device code:\n" + warnStyle.Render(d.DeviceCode)
+	fieldLabel := lipgloss.NewStyle().Foreground(muted).Render
+	body := titleStyle.Render("Approve Login") + "\n\n" +
+		subtle.Render("Scan the QR code or open the URL, then enter the device code.") + "\n\n" +
+		fieldLabel("URL") + "\n" + codeStyle.Render(url) + "\n\n" +
+		fieldLabel("Device Code") + "\n" + warnStyle.Render(d.DeviceCode)
 
 	if m.width >= 90 && m.height >= 32 {
 		if qr := renderQRCode(url); qr != "" {
 			body += "\n\n" + qr
 		}
-	} else {
-		body += "\n\n" + warnStyle.Render("Terminal too small for QR code. Use the URL/code above.")
 	}
 
-	body += "\n" + m.spin.View() + " Waiting for authorization..."
-	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, activeCard.Width(boxWidth).Render(body), lipgloss.WithWhitespaceBackground(bg))
+	body += "\n\n" + m.spin.View() + "  " + subtle.Render("Waiting for authorization...")
+
+	placed := lipgloss.Place(
+		maxInt(40, m.width-4), maxInt(12, m.height-8),
+		lipgloss.Center, lipgloss.Center,
+		activePanelStyle.Width(boxWidth-6).Render(body),
+		lipgloss.WithWhitespaceBackground(bg),
+	)
 	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
 
 func (m model) viewReloginModal() string {
 	boxWidth := m.width - 12
-	if boxWidth > 78 {
-		boxWidth = 78
+	if boxWidth > 76 {
+		boxWidth = 76
 	}
 	if boxWidth < 44 {
 		boxWidth = 44
@@ -1230,42 +1295,69 @@ func (m model) viewReloginModal() string {
 		Background(lipgloss.Color("#050812")).
 		Foreground(white).
 		Padding(0, 1).
-		Width(boxWidth - 8).
+		Width(boxWidth - 14).
 		Render(m.reloginInput.View())
-	body := titleStyle.Render("Relogin with device code") + "\n\n" +
-		subtle.Render("Paste the device code generated from the SteadIP dashboard.") + "\n\n" +
+	body := titleStyle.Render("Relogin") + "\n\n" +
+		subtle.Render("Paste the device code from the SteadIP dashboard:") + "\n\n" +
 		inputBox
 	if m.err != "" {
 		body += "\n\n" + errStyle.Render(m.err)
 	}
-	body += "\n\n" + subtle.Render("enter submit • esc cancel")
-	modal := activeCard.Width(boxWidth).Padding(1, 2).Background(panel).Render(body)
-	placed := lipgloss.Place(maxInt(40, m.width-4), maxInt(12, m.height-8), lipgloss.Center, lipgloss.Center, modal, lipgloss.WithWhitespaceBackground(bg))
+	body += "\n\n" + subtle.Render("enter · submit    esc · cancel")
+	modal := activePanelStyle.Width(boxWidth - 6).Render(body)
+	placed := lipgloss.Place(
+		maxInt(40, m.width-4), maxInt(12, m.height-8),
+		lipgloss.Center, lipgloss.Center,
+		modal,
+		lipgloss.WithWhitespaceBackground(bg),
+	)
 	return lipgloss.NewStyle().Width(maxInt(40, m.width-4)).Height(maxInt(12, m.height-8)).Background(bg).Render(placed)
 }
 
 func statusMini(p Paths) string {
-	logged := "no"
+	dot := func(active bool) string {
+		if active {
+			return lipgloss.NewStyle().Foreground(green).Render("●")
+		}
+		return lipgloss.NewStyle().Foreground(red).Render("●")
+	}
+
+	loggedIn := false
 	if t, err := token(p); err == nil && t != "" {
-		logged = "yes"
+		loggedIn = true
 	}
-	man := "stopped"
-	if manualRunning(p) {
-		man = "running"
+	manual := manualRunning(p)
+	auto := autoEnabled(p)
+	daemon := daemonActive(p)
+
+	labelSt := lipgloss.NewStyle().Foreground(muted)
+	valSt := lipgloss.NewStyle().Foreground(white)
+
+	rows := []struct{ active bool; label, val string }{
+		{loggedIn, "Logged in  ", boolStr(loggedIn, "yes", "no")},
+		{manual,   "Tunnel     ", boolStr(manual, "running", "stopped")},
+		{auto,     "Auto-start ", boolStr(auto, "enabled", "disabled")},
+		{daemon,   "Daemon     ", boolStr(daemon, "running", "stopped")},
 	}
-	auto := "disabled"
-	if autoEnabled(p) {
-		auto = "enabled"
+
+	var lines []string
+	for _, r := range rows {
+		lines = append(lines, fmt.Sprintf("%s  %s  %s",
+			dot(r.active),
+			labelSt.Render(r.label),
+			valSt.Render(r.val),
+		))
 	}
-	daemon := "stopped"
-	if daemonActive(p) {
-		daemon = "running"
-	}
-	return fmt.Sprintf("Logged in: %s\nManual tunnel: %s\nAuto-start: %s\nDaemon: %s", logged, man, auto, daemon)
+	return strings.Join(lines, "\n")
 }
 
 func statusText(p Paths) string {
-	return statusMini(p) + "\n\nDashboard: " + dashboardURL + "\nConfig:    " + p.Config + "\nLogs:      " + p.Log + "\nfrpc:      " + p.Frpc
+	labelSt := lipgloss.NewStyle().Foreground(muted)
+	return statusMini(p) + "\n\n" +
+		labelSt.Render("Dashboard  ") + dashboardURL + "\n" +
+		labelSt.Render("Config     ") + p.Config + "\n" +
+		labelSt.Render("Logs       ") + p.Log + "\n" +
+		labelSt.Render("frpc       ") + p.Frpc
 }
 
 func openURL(url string) {
