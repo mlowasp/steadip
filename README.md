@@ -173,6 +173,18 @@ Use this the first time you install the SteadIP client.
 
 ---
 
+### `steadip monitor`
+
+Starts the htop-like tunnel monitor.
+
+```bash
+steadip monitor
+```
+
+![Starts the htop-like tunnel monitor.](https://steadip.com/assets/images/monitor.png)
+
+---
+
 ### `steadip relogin`
 
 Log in again using a device code generated from the webapp.
