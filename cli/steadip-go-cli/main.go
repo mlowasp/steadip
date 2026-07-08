@@ -1463,9 +1463,11 @@ type monitorModel struct {
 	spin           spinner.Model
 	lastAt         time.Time
 	frpcConn       bool
-	focusedPane    int // 0 = access logs, 1 = error logs
-	accessScrollUp int
-	frpcScrollUp   int
+	focusedPane      int // 0 = access logs, 1 = error logs
+	accessScrollUp   int
+	accessScrollLeft int
+	frpcScrollUp     int
+	frpcScrollLeft   int
 }
 
 type monitorRefreshMsg struct {
@@ -1589,6 +1591,18 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.accessScrollUp--
 			} else if m.focusedPane == 1 && m.frpcScrollUp > 0 {
 				m.frpcScrollUp--
+			}
+		case "left":
+			if m.focusedPane == 0 && m.accessScrollLeft > 0 {
+				m.accessScrollLeft--
+			} else if m.focusedPane == 1 && m.frpcScrollLeft > 0 {
+				m.frpcScrollLeft--
+			}
+		case "right":
+			if m.focusedPane == 0 {
+				m.accessScrollLeft++
+			} else if m.focusedPane == 1 {
+				m.frpcScrollLeft++
 			}
 		}
 	case spinner.TickMsg:
@@ -1752,6 +1766,68 @@ func fmtLogEntry(e LogEntry, maxWidth int) string {
 	return mTrunc(ts+"  "+data, maxWidth)
 }
 
+// fmtLogEntryRaw returns the full untruncated log entry string.
+func fmtLogEntryRaw(e LogEntry) string {
+	ts := fmtLogTime(e.CreationTime)
+	data := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, e.Data)
+	return ts + "  " + data
+}
+
+// hClip clips a plain (no ANSI) string to visibleW runes starting at scrollLeft.
+func hClip(s string, scrollLeft, visibleW int) string {
+	r := []rune(s)
+	if scrollLeft >= len(r) {
+		return ""
+	}
+	end := scrollLeft + visibleW
+	if end > len(r) {
+		end = len(r)
+	}
+	return string(r[scrollLeft:end])
+}
+
+// makeHScrollbar returns a horizontal scrollbar string of exactly visibleW rendered chars.
+func makeHScrollbar(totalW, visibleW, scrollLeft int) string {
+	if totalW <= visibleW {
+		return strings.Repeat(" ", visibleW)
+	}
+	maxLeft := totalW - visibleW
+	if scrollLeft > maxLeft {
+		scrollLeft = maxLeft
+	}
+	thumbW := visibleW * visibleW / totalW
+	if thumbW < 1 {
+		thumbW = 1
+	}
+	trackW := visibleW - thumbW
+	thumbStart := 0
+	if maxLeft > 0 {
+		thumbStart = scrollLeft * trackW / maxLeft
+	}
+	if thumbStart > trackW {
+		thumbStart = trackW
+	}
+	track := lipgloss.NewStyle().Foreground(dimText).Render("░")
+	thumb := lipgloss.NewStyle().Foreground(muted).Render("█")
+	var sb strings.Builder
+	for i := 0; i < visibleW; i++ {
+		if i >= thumbStart && i < thumbStart+thumbW {
+			sb.WriteString(thumb)
+		} else {
+			sb.WriteString(track)
+		}
+	}
+	return sb.String()
+}
+
 func fmtBytes(b float64) string {
 	switch {
 	case b >= 1e12:
@@ -1866,19 +1942,19 @@ func (m monitorModel) View() string {
 	out = append(out, mRow(w, trafficRow))
 
 	// Use the actual line count so far to compute remaining space exactly.
-	// Still to emit: ACCESS_SEP(1) + access rows + FRPC_SEP(1) + frpc rows + BOTTOM(1) + FOOTER(1) = 4 + rows
+	// Still to emit: ACCESS_SEP(1) + access rows + access hscroll(1) + FRPC_SEP(1) + frpc rows + frpc hscroll(1) + BOTTOM(1) + FOOTER(1) = 6 + rows
 	h := m.height
 	if h < 10 {
 		h = 10
 	}
-	remaining := h - len(out) - 4
+	remaining := h - len(out) - 6
 	if remaining < 2 {
 		remaining = 2
 	}
 	maxAccessLines := remaining / 2
 	maxFrpcLines := remaining - maxAccessLines
 
-	// Access logs – scroll-aware with scrollbar
+	// Access logs – scroll-aware with vertical + horizontal scrollbars
 	aAll := m.snap.accessLogs
 	aTotal := len(aAll)
 	aScrollUp := m.accessScrollUp
@@ -1900,6 +1976,22 @@ func (m monitorModel) View() string {
 	aVisible := aAll[aStart:aEnd]
 	aSB := makeScrollbar(aTotal, maxAccessLines, aScrollUp)
 
+	// Compute max natural content width for horizontal scrollbar.
+	aViewW := contentW - 2 // 1 for vertical SB, 1 spare
+	aMaxW := aViewW
+	for _, e := range aAll {
+		if rw := len([]rune(fmtLogEntryRaw(e))); rw > aMaxW {
+			aMaxW = rw
+		}
+	}
+	aScrollLeft := m.accessScrollLeft
+	if aScrollLeft > aMaxW-aViewW {
+		aScrollLeft = aMaxW - aViewW
+	}
+	if aScrollLeft < 0 {
+		aScrollLeft = 0
+	}
+
 	aLabel := "ACCESS LOGS"
 	if aScrollUp > 0 {
 		aLabel += fmt.Sprintf(" [↑%d]", aScrollUp)
@@ -1911,13 +2003,14 @@ func (m monitorModel) View() string {
 		case len(aVisible) == 0 && i == 0:
 			out = append(out, mRowSB(w, subtle.Render("  no access logs"), sb))
 		case i < len(aVisible):
-			out = append(out, mRowSB(w, fmtLogEntry(aVisible[i], contentW-2), sb))
+			out = append(out, mRowSB(w, hClip(fmtLogEntryRaw(aVisible[i]), aScrollLeft, aViewW), sb))
 		default:
 			out = append(out, mRowSB(w, "", sb))
 		}
 	}
+	out = append(out, mRow(w, makeHScrollbar(aMaxW, contentW-2, aScrollLeft)))
 
-	// Error logs – scroll-aware with scrollbar
+	// Error logs – scroll-aware with vertical + horizontal scrollbars
 	fAll := m.snap.frpcLogs
 	fTotal := len(fAll)
 	fScrollUp := m.frpcScrollUp
@@ -1939,6 +2032,22 @@ func (m monitorModel) View() string {
 	fVisible := fAll[fStart:fEnd]
 	fSB := makeScrollbar(fTotal, maxFrpcLines, fScrollUp)
 
+	// Compute max natural content width for horizontal scrollbar.
+	fViewW := contentW - 2
+	fMaxW := fViewW
+	for _, e := range fAll {
+		if rw := len([]rune(fmtLogEntryRaw(e))); rw > fMaxW {
+			fMaxW = rw
+		}
+	}
+	fScrollLeft := m.frpcScrollLeft
+	if fScrollLeft > fMaxW-fViewW {
+		fScrollLeft = fMaxW - fViewW
+	}
+	if fScrollLeft < 0 {
+		fScrollLeft = 0
+	}
+
 	fLabel := "ERROR LOGS"
 	if fScrollUp > 0 {
 		fLabel += fmt.Sprintf(" [↑%d]", fScrollUp)
@@ -1950,11 +2059,12 @@ func (m monitorModel) View() string {
 		case len(fVisible) == 0 && i == 0:
 			out = append(out, mRowSB(w, subtle.Render("  no error logs"), sb))
 		case i < len(fVisible):
-			out = append(out, mRowSB(w, subtle.Render(fmtLogEntry(fVisible[i], contentW-2)), sb))
+			out = append(out, mRowSB(w, subtle.Render(hClip(fmtLogEntryRaw(fVisible[i]), fScrollLeft, fViewW)), sb))
 		default:
 			out = append(out, mRowSB(w, "", sb))
 		}
 	}
+	out = append(out, mRow(w, makeHScrollbar(fMaxW, contentW-2, fScrollLeft)))
 
 	// Bottom border
 	out = append(out, mBot(w))
@@ -1968,7 +2078,7 @@ func (m monitorModel) View() string {
 		refreshInfo = "  " + errStyle.Render(m.err)
 	}
 	paneNames := [2]string{"ACCESS LOGS", "ERROR LOGS"}
-	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    ↑↓ · scroll ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
+	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    ↑↓ · scroll    ←→ · h-scroll ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
 
 	return lipgloss.NewStyle().Background(bg).Width(w).Render(strings.Join(out, "\n"))
 }
