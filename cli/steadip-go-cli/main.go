@@ -1418,12 +1418,13 @@ func scrub(s string) string {
 // ─── Monitor ─────────────────────────────────────────────────────────────────
 
 type MonitorTunnel struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Domain  string `json:"subdomain"`
-	LastPing string `json:"last_ping_timestamp"`
-	Latency int // avg of access log latencies, computed in fetch
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+	Domain   string  `json:"subdomain"`
+	LastPing string  `json:"last_ping_timestamp"`
+	Latency    int     // avg of access log latencies, computed in fetch
+	Throughput float64 // avg bytes/sec across access log entries, computed in fetch
 }
 
 type TrafficData struct {
@@ -1463,7 +1464,8 @@ type monitorModel struct {
 	spin           spinner.Model
 	lastAt         time.Time
 	frpcConn       bool
-	focusedPane      int // 0 = access logs, 1 = error logs
+	focusedPane      int // 0 = tunnels, 1 = access logs, 2 = error logs
+	tunnelCursor     int // -1 = all tunnels, 0..N-1 = specific tunnel index
 	accessScrollUp   int
 	accessScrollLeft int
 	frpcScrollUp     int
@@ -1482,21 +1484,64 @@ func newMonitorModel(p Paths, tok string) monitorModel {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(cyan)
 	return monitorModel{
-		p:        p,
-		tok:      tok,
-		spin:     s,
-		loading:  true,
-		width:    100,
-		height:   40,
-		frpcConn: manualRunning(p) || daemonActive(p),
+		p:            p,
+		tok:          tok,
+		spin:         s,
+		loading:      true,
+		width:        100,
+		height:       40,
+		frpcConn:     manualRunning(p) || daemonActive(p),
+		tunnelCursor: -1,
 	}
 }
 
 func (m monitorModel) Init() tea.Cmd {
-	return tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok))
+	return tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok, ""))
 }
 
-func doMonitorFetch(p Paths, tok string) tea.Cmd {
+func (m monitorModel) activeTunnelID() string {
+	if m.tunnelCursor >= 0 && m.tunnelCursor < len(m.snap.tunnels) {
+		return m.snap.tunnels[m.tunnelCursor].ID
+	}
+	return ""
+}
+
+// parseAccessLogThroughput extracts bytes=X and request_time=Y from a log line.
+// request_time is expected in seconds (float).
+func parseAccessLogThroughput(data string) (bytes float64, reqTime float64, ok bool) {
+	var gotBytes, gotTime bool
+	for _, field := range strings.Fields(data) {
+		if strings.HasPrefix(field, "bytes=") {
+			if v, err := strconv.ParseFloat(strings.TrimPrefix(field, "bytes="), 64); err == nil && v >= 0 {
+				bytes = v
+				gotBytes = true
+			}
+		} else if strings.HasPrefix(field, "request_time=") {
+			if v, err := strconv.ParseFloat(strings.TrimPrefix(field, "request_time="), 64); err == nil && v > 0 {
+				reqTime = v
+				gotTime = true
+			}
+		}
+	}
+	return bytes, reqTime, gotBytes && gotTime
+}
+
+func fmtThroughput(bps float64) string {
+	switch {
+	case bps <= 0:
+		return "-"
+	case bps >= 1e9:
+		return fmt.Sprintf("%.1f GB/s", bps/1e9)
+	case bps >= 1e6:
+		return fmt.Sprintf("%.1f MB/s", bps/1e6)
+	case bps >= 1e3:
+		return fmt.Sprintf("%.1f KB/s", bps/1e3)
+	default:
+		return fmt.Sprintf("%.0f B/s", bps)
+	}
+}
+
+func doMonitorFetch(p Paths, tok string, tunnelID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -1521,6 +1566,9 @@ func doMonitorFetch(p Paths, tok string) tea.Cmd {
 		var allAccess, allError []LogEntry
 
 		for i, t := range tunnels {
+			if tunnelID != "" && t.ID != tunnelID {
+				continue
+			}
 			var tr TrafficData
 			if _, _, e := getJSON(ctx, "/device/traffic?tunnel_id="+t.ID, tok, &tr); e == nil {
 				totalDaily += tr.Daily
@@ -1530,15 +1578,23 @@ func doMonitorFetch(p Paths, tok string) tea.Cmd {
 			if _, _, e := getJSON(ctx, "/device/logs?tunnel_id="+t.ID, tok, &logs); e == nil {
 				allAccess = append(allAccess, logs.Access...)
 				allError = append(allError, logs.Error...)
-				var sum, count int
+				var latSum, latCount int
+				var tpTotalBytes, tpTotalTime float64
 				for _, entry := range logs.Access {
 					if v, err := strconv.Atoi(strings.TrimSpace(entry.Latency)); err == nil && v > 0 {
-						sum += v
-						count++
+						latSum += v
+						latCount++
+					}
+					if b, rt, ok := parseAccessLogThroughput(entry.Data); ok {
+						tpTotalBytes += b
+						tpTotalTime += rt
 					}
 				}
-				if count > 0 {
-					tunnels[i].Latency = sum / count
+				if latCount > 0 {
+					tunnels[i].Latency = latSum / latCount
+				}
+				if tpTotalTime > 0 {
+					tunnels[i].Throughput = tpTotalBytes / tpTotalTime
 				}
 			}
 		}
@@ -1565,11 +1621,20 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			m.loading = true
-			return m, doMonitorFetch(m.p, m.tok)
+			return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
 		case "tab":
-			m.focusedPane = 1 - m.focusedPane
+			m.focusedPane = (m.focusedPane + 1) % 3
 		case "up", "k":
-			if m.focusedPane == 0 {
+			switch m.focusedPane {
+			case 0:
+				if m.tunnelCursor > -1 {
+					m.tunnelCursor--
+					m.accessScrollUp, m.accessScrollLeft = 0, 0
+					m.frpcScrollUp, m.frpcScrollLeft = 0, 0
+					m.loading = true
+					return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+				}
+			case 1:
 				maxUp := len(m.snap.accessLogs) - 1
 				if maxUp < 0 {
 					maxUp = 0
@@ -1577,7 +1642,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.accessScrollUp < maxUp {
 					m.accessScrollUp++
 				}
-			} else {
+			case 2:
 				maxUp := len(m.snap.frpcLogs) - 1
 				if maxUp < 0 {
 					maxUp = 0
@@ -1587,21 +1652,34 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "down", "j":
-			if m.focusedPane == 0 && m.accessScrollUp > 0 {
-				m.accessScrollUp--
-			} else if m.focusedPane == 1 && m.frpcScrollUp > 0 {
-				m.frpcScrollUp--
+			switch m.focusedPane {
+			case 0:
+				if m.tunnelCursor < len(m.snap.tunnels)-1 {
+					m.tunnelCursor++
+					m.accessScrollUp, m.accessScrollLeft = 0, 0
+					m.frpcScrollUp, m.frpcScrollLeft = 0, 0
+					m.loading = true
+					return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+				}
+			case 1:
+				if m.accessScrollUp > 0 {
+					m.accessScrollUp--
+				}
+			case 2:
+				if m.frpcScrollUp > 0 {
+					m.frpcScrollUp--
+				}
 			}
 		case "left":
-			if m.focusedPane == 0 && m.accessScrollLeft > 0 {
+			if m.focusedPane == 1 && m.accessScrollLeft > 0 {
 				m.accessScrollLeft--
-			} else if m.focusedPane == 1 && m.frpcScrollLeft > 0 {
+			} else if m.focusedPane == 2 && m.frpcScrollLeft > 0 {
 				m.frpcScrollLeft--
 			}
 		case "right":
-			if m.focusedPane == 0 {
+			if m.focusedPane == 1 {
 				m.accessScrollLeft++
-			} else if m.focusedPane == 1 {
+			} else if m.focusedPane == 2 {
 				m.frpcScrollLeft++
 			}
 		}
@@ -1611,7 +1689,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case monitorTickMsg:
 		m.loading = true
-		return m, doMonitorFetch(m.p, m.tok)
+		return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
 	case monitorRefreshMsg:
 		m.loading = false
 		if v.err != nil {
@@ -1883,31 +1961,46 @@ func (m monitorModel) View() string {
 	out = append(out, mRow(w, infoRow))
 
 	// Tunnels section
-	out = append(out, mSep(w, "TUNNELS"))
+	out = append(out, mSepPane(w, "TUNNELS", m.focusedPane == 0))
 
 	const (
-		nameW   = 18
-		typeW   = 6
-		statusW = 10
-		latW    = 8
+		nameW       = 18
+		typeW       = 6
+		statusW     = 10
+		latW        = 8
+		throughputW = 10
+		cursorW     = 2
 	)
-	// 4 spaces separate the 5 columns
-	domainW := contentW - nameW - typeW - statusW - latW - 4
+	// 5 spaces separate the 6 columns, plus cursor prefix column
+	domainW := contentW - cursorW - nameW - typeW - statusW - latW - throughputW - 5
 	if domainW < 10 {
 		domainW = 10
 	}
 
-	colHdr := mPad(subtle.Render("NAME"), nameW) + " " +
+	colHdr := strings.Repeat(" ", cursorW) +
+		mPad(subtle.Render("NAME"), nameW) + " " +
 		mPad(subtle.Render("TYPE"), typeW) + " " +
 		mPad(subtle.Render("DOMAIN"), domainW) + " " +
 		mPad(subtle.Render("STATUS"), statusW) + " " +
-		subtle.Render("LATENCY")
+		mPad(subtle.Render("LATENCY"), latW) + " " +
+		subtle.Render("THROUGHPUT")
 	out = append(out, mRow(w, colHdr))
 
-	if len(m.snap.tunnels) == 0 {
-		out = append(out, mRow(w, subtle.Render("  no tunnels found")))
+	// "ALL TUNNELS" virtual row
+	{
+		cur := "  "
+		label := subtle.Render("ALL TUNNELS")
+		if m.tunnelCursor == -1 {
+			cur = lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("▶ ")
+			label = lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("ALL TUNNELS")
+		}
+		out = append(out, mRow(w, cur+label))
 	}
-	for _, t := range m.snap.tunnels {
+
+	if len(m.snap.tunnels) == 0 {
+		out = append(out, mRow(w, strings.Repeat(" ", cursorW)+subtle.Render("no tunnels found")))
+	}
+	for i, t := range m.snap.tunnels {
 		ts, _ := strconv.ParseInt(strings.TrimSpace(t.LastPing), 10, 64)
 		isUp := ts > 0 && time.Now().Unix()-ts <= 30
 		st := "OFFLINE"
@@ -1926,11 +2019,18 @@ func (m monitorModel) View() string {
 			lat = fmt.Sprintf("%dms", t.Latency)
 		}
 
-		row := mPad(mTrunc(t.Name, nameW-1), nameW) + " " +
+		cur := "  "
+		if m.tunnelCursor == i {
+			cur = lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("▶ ")
+		}
+
+		row := cur +
+			mPad(mTrunc(t.Name, nameW-1), nameW) + " " +
 			mPad(mTrunc(t.Type, typeW-1), typeW) + " " +
 			mPad(mTrunc(t.Domain+".steadip.com", domainW-1), domainW) + " " +
 			mPad(dotSt+" "+stSt, statusW) + " " +
-			lat
+			mPad(lat, latW) + " " +
+			fmtThroughput(t.Throughput)
 		out = append(out, mRow(w, row))
 	}
 
@@ -1996,7 +2096,7 @@ func (m monitorModel) View() string {
 	if aScrollUp > 0 {
 		aLabel += fmt.Sprintf(" [↑%d]", aScrollUp)
 	}
-	out = append(out, mSepPane(w, aLabel, m.focusedPane == 0))
+	out = append(out, mSepPane(w, aLabel, m.focusedPane == 1))
 	for i := 0; i < maxAccessLines; i++ {
 		sb := aSB[i]
 		switch {
@@ -2052,7 +2152,7 @@ func (m monitorModel) View() string {
 	if fScrollUp > 0 {
 		fLabel += fmt.Sprintf(" [↑%d]", fScrollUp)
 	}
-	out = append(out, mSepPane(w, fLabel, m.focusedPane == 1))
+	out = append(out, mSepPane(w, fLabel, m.focusedPane == 2))
 	for i := 0; i < maxFrpcLines; i++ {
 		sb := fSB[i]
 		switch {
@@ -2077,8 +2177,12 @@ func (m monitorModel) View() string {
 	if m.err != "" {
 		refreshInfo = "  " + errStyle.Render(m.err)
 	}
-	paneNames := [2]string{"ACCESS LOGS", "ERROR LOGS"}
-	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    ↑↓ · scroll    ←→ · h-scroll ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
+	paneNames := [3]string{"TUNNELS", "ACCESS LOGS", "ERROR LOGS"}
+	scrollHint := "↑↓ · scroll    ←→ · h-scroll"
+	if m.focusedPane == 0 {
+		scrollHint = "↑↓ · select tunnel"
+	}
+	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    "+scrollHint+"  ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
 
 	return lipgloss.NewStyle().Background(bg).Width(w).Render(strings.Join(out, "\n"))
 }
