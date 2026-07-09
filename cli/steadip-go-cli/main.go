@@ -85,26 +85,29 @@ func ensureDirs(p Paths) error {
 }
 
 var (
-	cyan    = lipgloss.Color("#5FFFD7")
-	green   = lipgloss.Color("#4ADE80")
-	red     = lipgloss.Color("#F87171")
-	yellow  = lipgloss.Color("#FBBF24")
-	muted   = lipgloss.Color("#8B9AAD")
-	bg      = lipgloss.Color("#070B14")
-	panel   = lipgloss.Color("#0D1322")
-	border  = lipgloss.Color("#1F2A44")
-	white   = lipgloss.Color("#F4F8FF")
-	dimText = lipgloss.Color("#3A4F6E")
+	cyan     = lipgloss.Color("#00F5FF") // electric cyan
+	neonPink = lipgloss.Color("#FF2D78") // neon magenta/pink
+	green    = lipgloss.Color("#39FF14") // neon green
+	red      = lipgloss.Color("#FF2D55") // hot red
+	yellow   = lipgloss.Color("#FFE600") // acid yellow
+	purple   = lipgloss.Color("#BD00FF") // neon purple
+	muted    = lipgloss.Color("#7E7FA8") // muted blue-purple
+	bg       = lipgloss.Color("#06000F") // near-black
+	panel    = lipgloss.Color("#0D0020") // deep purple panel
+	border   = lipgloss.Color("#3A0060") // dim purple border
+	white    = lipgloss.Color("#E0E8FF") // cold white
+	dimText  = lipgloss.Color("#2A1B42") // very dim purple
 
-	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(cyan)
+	titleStyle       = lipgloss.NewStyle().Bold(true).Foreground(neonPink)
 	subtle           = lipgloss.NewStyle().Foreground(muted)
 	appStyle         = lipgloss.NewStyle().Padding(1, 2).Background(bg)
 	okStyle          = lipgloss.NewStyle().Bold(true).Foreground(green)
 	errStyle         = lipgloss.NewStyle().Bold(true).Foreground(red)
 	warnStyle        = lipgloss.NewStyle().Bold(true).Foreground(yellow)
-	codeStyle        = lipgloss.NewStyle().Foreground(white).Background(lipgloss.Color("#050812")).Padding(0, 1)
-	panelStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(border).Background(panel).Padding(1, 2)
-	activePanelStyle = panelStyle.Copy().BorderForeground(cyan)
+	codeStyle        = lipgloss.NewStyle().Foreground(cyan).Background(lipgloss.Color("#0A001A")).Padding(0, 1)
+	panelStyle       = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(border).Background(panel).Padding(1, 2)
+	activePanelStyle = panelStyle.Copy().BorderForeground(neonPink)
+	monBorderSt      = lipgloss.NewStyle().Foreground(border)
 )
 
 type DeviceCodeResp struct {
@@ -791,15 +794,17 @@ const (
 )
 
 type model struct {
-	p                    Paths
-	spin                 spinner.Model
-	screen               screen
-	cursor               int
-	width, height        int
-	message, result, err string
-	login                *DeviceCodeResp
-	reloginInput         textinput.Model
-	launchMonitor        bool
+	p                         Paths
+	spin                      spinner.Model
+	screen                    screen
+	cursor                    int
+	width, height             int
+	message, result, err      string
+	login                     *DeviceCodeResp
+	reloginInput              textinput.Model
+	launchMonitor             bool
+	logsLines                 []string
+	logsScrollV, logsScrollH  int
 }
 
 type doneMsg struct {
@@ -851,7 +856,7 @@ func menuIndexByShortcut(sc string) int {
 func newModel(p Paths) model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(cyan)
+	s.Style = lipgloss.NewStyle().Foreground(neonPink)
 
 	ti := textinput.New()
 	ti.Placeholder = "Paste device code from SteadIP dashboard"
@@ -959,6 +964,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.reloginInput, cmd = m.reloginInput.Update(v)
 			return m, cmd
+		}
+
+		if m.screen == logsScreen {
+			switch v.String() {
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			case "esc":
+				m.screen = home
+				return m, nil
+			case "up", "k":
+				m.logsScrollV++
+			case "down", "j":
+				if m.logsScrollV > 0 {
+					m.logsScrollV--
+				}
+			case "left":
+				if m.logsScrollH > 0 {
+					m.logsScrollH--
+				}
+			case "right":
+				m.logsScrollH++
+			}
+			return m, nil
 		}
 
 		switch v.String() {
@@ -1106,9 +1134,13 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "logs":
 		m.screen = logsScreen
-		m.result = lastLines(m.p.Log, 80)
-		if m.result == "" {
-			m.result = "No logs yet."
+		m.logsScrollV = 0
+		m.logsScrollH = 0
+		raw := lastLines(m.p.Log, 2000)
+		if raw == "" {
+			m.logsLines = nil
+		} else {
+			m.logsLines = strings.Split(strings.TrimRight(raw, "\n"), "\n")
 		}
 		return m, nil
 	case "monitor":
@@ -1145,9 +1177,9 @@ func (m model) View() string {
 		h = 32
 	}
 
-	logo := lipgloss.NewStyle().Bold(true).Foreground(cyan).Render("STEADIP")
-	sep := lipgloss.NewStyle().Foreground(dimText).Render("  ·  ")
-	tagline := subtle.Render("Free HTTP/HTTPS tunnels for local apps, webhooks & homelabs")
+	logo := lipgloss.NewStyle().Bold(true).Foreground(neonPink).Render("// STEADIP //")
+	sep := lipgloss.NewStyle().Foreground(purple).Render("  »  ")
+	tagline := subtle.Render("encrypted tunnels for the grid  ·  free for homelabs & webhooks")
 	divW := w - 4
 	if divW < 0 {
 		divW = 0
@@ -1155,7 +1187,7 @@ func (m model) View() string {
 	if divW > 200 {
 		divW = 200
 	}
-	divider := lipgloss.NewStyle().Foreground(dimText).Render(strings.Repeat("─", divW))
+	divider := lipgloss.NewStyle().Foreground(border).Render(strings.Repeat("━", divW))
 	header := logo + sep + tagline + "\n" + divider
 
 	contentW := maxInt(40, w-4)
@@ -1164,7 +1196,7 @@ func (m model) View() string {
 	var body string
 	switch m.screen {
 	case home:
-		footer := subtle.Render("↑↓/jk · navigate    enter · select    q · quit")
+		footer := subtle.Render("↑↓/jk » navigate  //  enter » select  //  q » quit")
 		body = header + "\n\n" + m.viewHome() + "\n\n" + footer
 	case working:
 		content := m.spin.View() + "  " + lipgloss.NewStyle().Foreground(white).Render(m.message)
@@ -1184,19 +1216,97 @@ func (m model) View() string {
 		box := activePanelStyle.Width(minInt(86, maxInt(34, w-12))).Render(resultBody)
 		body = header + "\n\n" +
 			lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) +
-			"\n\n" + subtle.Render("esc · back    q · quit")
+			"\n\n" + subtle.Render("esc » back  //  q » quit")
 	case statusScreen:
 		box := activePanelStyle.Width(minInt(82, maxInt(34, w-12))).Render(
 			titleStyle.Render("Status") + "\n\n" + m.result,
 		)
 		body = header + "\n\n" +
 			lipgloss.Place(contentW, contentH-6, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceBackground(bg)) +
-			"\n\n" + subtle.Render("esc · back    q · quit")
+			"\n\n" + subtle.Render("esc » back  //  q » quit")
 	case logsScreen:
-		box := activePanelStyle.Width(maxInt(54, w-12)).Height(maxInt(12, h-10)).Render(
-			titleStyle.Render("Logs") + "\n\n" + m.result,
-		)
-		body = header + "\n\n" + box + "\n\n" + subtle.Render("esc · back    q · quit")
+		panelW := maxInt(54, w-8)
+		panelH := maxInt(12, h-6)
+		// ThickBorder(1+1=2) + Padding(top/bot 1+1=2, left/right 2+2=4)
+		innerW := panelW - 6
+		innerH := panelH - 4
+		// title(1) + blank(1) + hscrollbar(1) = 3 rows overhead
+		usable := innerH - 3
+		if usable < 1 {
+			usable = 1
+		}
+		// 1 col reserved for vertical scrollbar
+		viewW := innerW - 1
+		if viewW < 4 {
+			viewW = 4
+		}
+
+		lines := m.logsLines
+		total := len(lines)
+
+		if total == 0 {
+			box := activePanelStyle.Width(panelW).Height(panelH).Render(
+				titleStyle.Render("// Logs") + "\n\n" + subtle.Render("No logs yet."),
+			)
+			body = header + "\n\n" + box + "\n\n" + subtle.Render("esc » back  //  q » quit")
+			break
+		}
+
+		// vertical scroll: 0 = bottom (newest), higher = older
+		maxScrollV := total - usable
+		if maxScrollV < 0 {
+			maxScrollV = 0
+		}
+		scrollV := m.logsScrollV
+		if scrollV > maxScrollV {
+			scrollV = maxScrollV
+		}
+		start := total - usable - scrollV
+		if start < 0 {
+			start = 0
+		}
+		end := start + usable
+		if end > total {
+			end = total
+		}
+		visible := lines[start:end]
+
+		// compute max line rune width across all lines for hscrollbar
+		maxLineW := viewW
+		for _, l := range lines {
+			if rw := len([]rune(l)); rw > maxLineW {
+				maxLineW = rw
+			}
+		}
+		maxScrollH := maxLineW - viewW
+		if maxScrollH < 0 {
+			maxScrollH = 0
+		}
+		scrollH := m.logsScrollH
+		if scrollH > maxScrollH {
+			scrollH = maxScrollH
+		}
+
+		vsb := makeScrollbar(total, usable, scrollV)
+
+		var rows []string
+		for i := 0; i < usable; i++ {
+			var line string
+			if i < len(visible) {
+				line = hClip(visible[i], scrollH, viewW)
+			}
+			pad := viewW - lipgloss.Width(line)
+			if pad < 0 {
+				pad = 0
+			}
+			rows = append(rows, lipgloss.NewStyle().Foreground(white).Render(line)+strings.Repeat(" ", pad)+vsb[i])
+		}
+		// horizontal scrollbar row fills the full innerW
+		rows = append(rows, makeHScrollbar(maxLineW, viewW, scrollH)+" ")
+
+		content := titleStyle.Render("// Logs") + "\n\n" + strings.Join(rows, "\n")
+		box := activePanelStyle.Width(panelW).Height(panelH).Render(content)
+		body = header + "\n\n" + box + "\n\n" + subtle.Render("↑↓ » scroll  //  ←→ » h-scroll  //  esc » back  //  q » quit")
 	}
 
 	return lipgloss.NewStyle().Width(w).Height(h).Background(bg).Render(
@@ -1215,9 +1325,9 @@ func (m model) viewHome() string {
 	}
 	menuW := available - statusW - 4
 
-	sectionSt := lipgloss.NewStyle().Foreground(dimText).Bold(true)
-	cursorSt := lipgloss.NewStyle().Foreground(cyan).Bold(true)
-	scSt := lipgloss.NewStyle().Foreground(yellow)
+	sectionSt := lipgloss.NewStyle().Foreground(purple).Bold(true)
+	cursorSt := lipgloss.NewStyle().Foreground(neonPink).Bold(true)
+	scSt := lipgloss.NewStyle().Foreground(dimText)
 	scSelSt := lipgloss.NewStyle().Foreground(yellow).Bold(true)
 	labelSt := lipgloss.NewStyle().Foreground(white)
 	labelSelSt := lipgloss.NewStyle().Foreground(cyan).Bold(true)
@@ -1228,7 +1338,7 @@ func (m model) viewHome() string {
 			if i > 0 {
 				menuLines = append(menuLines, "")
 			}
-			menuLines = append(menuLines, sectionSt.Render("  "+strings.ToUpper(it.section)))
+			menuLines = append(menuLines, sectionSt.Render("  // "+strings.ToUpper(it.section)))
 		}
 
 		sc := "[" + it.shortcut + "]"
@@ -1245,8 +1355,8 @@ func (m model) viewHome() string {
 
 	leftPanel := panelStyle.Width(menuW - 6).Render(strings.Join(menuLines, "\n"))
 
-	divLine := lipgloss.NewStyle().Foreground(dimText).Render(strings.Repeat("─", statusW-10))
-	statusContent := titleStyle.Render("Status") + "\n\n" + statusMini(m.p) +
+	divLine := lipgloss.NewStyle().Foreground(border).Render(strings.Repeat("━", statusW-10))
+	statusContent := titleStyle.Render("// STATUS") + "\n\n" + statusMini(m.p) +
 		"\n\n" + divLine +
 		"\n" + subtle.Render("Dashboard") +
 		"\n" + lipgloss.NewStyle().Foreground(cyan).Render(dashboardURL)
@@ -1264,7 +1374,7 @@ func (m model) viewLogin() string {
 	url := qrURLForDevice(*d)
 
 	fieldLabel := lipgloss.NewStyle().Foreground(muted).Render
-	body := titleStyle.Render("Approve Login") + "\n\n" +
+	body := titleStyle.Render("// AUTHENTICATE") + "\n\n" +
 		subtle.Render("Scan the QR code or open the URL, then enter the device code.") + "\n\n" +
 		fieldLabel("URL") + "\n" + codeStyle.Render(url) + "\n\n" +
 		fieldLabel("Device Code") + "\n" + warnStyle.Render(d.DeviceCode)
@@ -1302,13 +1412,13 @@ func (m model) viewReloginModal() string {
 		Padding(0, 1).
 		Width(boxWidth - 14).
 		Render(m.reloginInput.View())
-	body := titleStyle.Render("Relogin") + "\n\n" +
+	body := titleStyle.Render("// RELOGIN") + "\n\n" +
 		subtle.Render("Paste the device code from the SteadIP dashboard:") + "\n\n" +
 		inputBox
 	if m.err != "" {
 		body += "\n\n" + errStyle.Render(m.err)
 	}
-	body += "\n\n" + subtle.Render("enter · submit    esc · cancel")
+	body += "\n\n" + subtle.Render("enter » submit  //  esc » cancel")
 	modal := activePanelStyle.Width(boxWidth - 6).Render(body)
 	placed := lipgloss.Place(
 		maxInt(40, m.width-4), maxInt(12, m.height-8),
@@ -1728,7 +1838,8 @@ func mTop(w int, label string) string {
 	if n < 1 {
 		n = 1
 	}
-	return "┌─ " + label + " " + strings.Repeat("─", n) + "┐"
+	styledLabel := lipgloss.NewStyle().Foreground(neonPink).Bold(true).Render(label)
+	return monBorderSt.Render("┌─ ") + styledLabel + monBorderSt.Render(" "+strings.Repeat("─", n)+"┐")
 }
 
 func mSep(w int, label string) string {
@@ -1736,7 +1847,8 @@ func mSep(w int, label string) string {
 	if n < 1 {
 		n = 1
 	}
-	return "├─ " + label + " " + strings.Repeat("─", n) + "┤"
+	styledLabel := lipgloss.NewStyle().Foreground(muted).Bold(true).Render(label)
+	return monBorderSt.Render("├─ ") + styledLabel + monBorderSt.Render(" "+strings.Repeat("─", n)+"┤")
 }
 
 func mRow(w int, content string) string {
@@ -1745,7 +1857,7 @@ func mRow(w int, content string) string {
 	if pad < 0 {
 		pad = 0
 	}
-	return "│ " + content + strings.Repeat(" ", pad) + " │"
+	return monBorderSt.Render("│") + " " + content + strings.Repeat(" ", pad) + " " + monBorderSt.Render("│")
 }
 
 // mSepPane is like mSep but highlights the label in cyan when focused.
@@ -1754,15 +1866,15 @@ func mSepPane(w int, label string, focused bool) string {
 	if n < 1 {
 		n = 1
 	}
-	renderedLabel := label
+	renderedLabel := lipgloss.NewStyle().Foreground(dimText).Render(label)
 	if focused {
 		renderedLabel = lipgloss.NewStyle().Foreground(cyan).Bold(true).Render(label)
 	}
-	return "├─ " + renderedLabel + " " + strings.Repeat("─", n) + "┤"
+	return monBorderSt.Render("├─ ") + renderedLabel + monBorderSt.Render(" "+strings.Repeat("─", n)+"┤")
 }
 
 func mBot(w int) string {
-	return "└" + strings.Repeat("─", w-2) + "┘"
+	return monBorderSt.Render("└" + strings.Repeat("─", w-2) + "┘")
 }
 
 // mRowSB is like mRow but reserves the last interior column for a scrollbar char.
@@ -1772,7 +1884,7 @@ func mRowSB(w int, content, sbChar string) string {
 	if pad < 0 {
 		pad = 0
 	}
-	return "│ " + content + strings.Repeat(" ", pad) + sbChar + "│"
+	return monBorderSt.Render("│") + " " + content + strings.Repeat(" ", pad) + sbChar + monBorderSt.Render("│")
 }
 
 // makeScrollbar returns `visible` single-char strings representing a scrollbar.
@@ -1936,7 +2048,7 @@ func (m monitorModel) View() string {
 	var out []string
 
 	// Title bar
-	out = append(out, mTop(w, "SteadIP Tunnel Monitor"))
+	out = append(out, mTop(w, "// STEADIP MONITOR //"))
 
 	// Info / header row
 	email := m.snap.email
@@ -1947,9 +2059,9 @@ func (m monitorModel) View() string {
 	if region == "" {
 		region = "–"
 	}
-	connTxt := lipgloss.NewStyle().Foreground(red).Render("● disconnected")
+	connTxt := lipgloss.NewStyle().Foreground(red).Bold(true).Render("◆ disconnected")
 	if m.frpcConn {
-		connTxt = lipgloss.NewStyle().Foreground(green).Render("● connected")
+		connTxt = lipgloss.NewStyle().Foreground(green).Bold(true).Render("◆ connected")
 	}
 	loadTxt := ""
 	if m.loading {
@@ -2182,7 +2294,7 @@ func (m monitorModel) View() string {
 	if m.focusedPane == 0 {
 		scrollHint = "↑↓ · select tunnel"
 	}
-	out = append(out, subtle.Render("q · quit    r · refresh    tab · switch pane    "+scrollHint+"  ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
+	out = append(out, subtle.Render("q » quit  //  r » refresh  //  tab » switch pane  //  "+scrollHint+"  ["+paneNames[m.focusedPane]+"]")+subtle.Render(refreshInfo))
 
 	return lipgloss.NewStyle().Background(bg).Width(w).Render(strings.Join(out, "\n"))
 }
