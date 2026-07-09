@@ -11,6 +11,8 @@ https://quiet-hermit-4821.steadip.com
   -> http://localhost:3000
 ```
 
+![steadip CLI/TUI](https://steadip.com/assets/images/tui.png)
+
 ---
 
 ## What SteadIP does
