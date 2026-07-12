@@ -1533,6 +1533,7 @@ type MonitorTunnel struct {
 	Type     string  `json:"type"`
 	Domain   string  `json:"subdomain"`
 	LastPing string  `json:"last_ping_timestamp"`
+	UserID   string  `json:"user_id"`
 	Latency    int     // avg of access log latencies, computed in fetch
 	Throughput float64 // avg bytes/sec across access log entries, computed in fetch
 }
@@ -1675,14 +1676,17 @@ func doMonitorFetch(p Paths, tok string, tunnelID string) tea.Cmd {
 		var totalDaily, totalMonthly float64
 		var allAccess, allError []LogEntry
 
+		if len(tunnels) > 0 {
+			var tr TrafficData
+			if _, _, e := getJSON(ctx, "/device/traffic?user_id="+tunnels[0].UserID, tok, &tr); e == nil {
+				totalDaily = tr.Daily
+				totalMonthly = tr.Monthly
+			}
+		}
+
 		for i, t := range tunnels {
 			if tunnelID != "" && t.ID != tunnelID {
 				continue
-			}
-			var tr TrafficData
-			if _, _, e := getJSON(ctx, "/device/traffic?tunnel_id="+t.ID, tok, &tr); e == nil {
-				totalDaily += tr.Daily
-				totalMonthly += tr.Monthly
 			}
 			var logs LogsData
 			if _, _, e := getJSON(ctx, "/device/logs?tunnel_id="+t.ID, tok, &logs); e == nil {
