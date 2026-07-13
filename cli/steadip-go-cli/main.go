@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	version         = "0.1.1"
+	version         = "0.2.0"
 	frpVersion      = "0.70.0"
 	apiBase         = "https://steadip.com/api"
 	dashboardURL    = "https://steadip.com"
@@ -1545,6 +1545,7 @@ type TrafficData struct {
 
 type LogEntry struct {
 	Data         string `json:"data"`
+	Gateway      string `json:"gateway"`
 	CreationTime string `json:"creation_time"`
 	Latency      string `json:"latency"`
 }
@@ -1957,7 +1958,11 @@ func fmtLogEntry(e LogEntry, maxWidth int) string {
 		}
 		return r
 	}, e.Data)
-	return mTrunc(ts+"  "+data, maxWidth)
+	prefix := ts
+	if e.Gateway != "" {
+		prefix += "  " + e.Gateway
+	}
+	return mTrunc(prefix+"  "+data, maxWidth)
 }
 
 // fmtLogEntryRaw returns the full untruncated log entry string.
@@ -1972,7 +1977,11 @@ func fmtLogEntryRaw(e LogEntry) string {
 		}
 		return r
 	}, e.Data)
-	return ts + "  " + data
+	prefix := ts
+	if e.Gateway != "" {
+		prefix += "  " + e.Gateway
+	}
+	return prefix + "  " + data
 }
 
 // hClip clips a plain (no ANSI) string to visibleW runes starting at scrollLeft.
