@@ -29,7 +29,7 @@ import (
 
 const (
 	version         = "0.1.1"
-	frpVersion      = "0.61.1"
+	frpVersion      = "0.70.0"
 	apiBase         = "https://steadip.com/api"
 	dashboardURL    = "https://steadip.com"
 	windowsTaskName = "SteadIP Tunnel Client"
