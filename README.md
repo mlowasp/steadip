@@ -444,7 +444,7 @@ Typical limits:
 
 | Plan | Monthly bandwidth | Daily fair-use limit |
 | --- | ---: | ---: |
-| Free | 100 GB/month | 10 GB/day |
+| Free | 50 GB/month | 5 GB/day |
 | Verified | 500 GB/month | 50 GB/day |
 
 Limits may be adjusted over time to protect the network from abuse.
