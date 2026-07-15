@@ -1777,7 +1777,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			m.loading = true
-			return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+			return m, tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok, m.activeTunnelID()))
 		case "tab":
 			m.focusedPane = (m.focusedPane + 1) % 3
 		case "up", "k":
@@ -1788,7 +1788,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.accessScrollUp, m.accessScrollLeft = 0, 0
 					m.frpcScrollUp, m.frpcScrollLeft = 0, 0
 					m.loading = true
-					return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+					return m, tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok, m.activeTunnelID()))
 				}
 			case 1:
 				maxUp := len(m.snap.accessLogs) - 1
@@ -1815,7 +1815,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.accessScrollUp, m.accessScrollLeft = 0, 0
 					m.frpcScrollUp, m.frpcScrollLeft = 0, 0
 					m.loading = true
-					return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+					return m, tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok, m.activeTunnelID()))
 				}
 			case 1:
 				if m.accessScrollUp > 0 {
@@ -1840,12 +1840,15 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case spinner.TickMsg:
+		if !m.loading {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(v)
 		return m, cmd
 	case monitorTickMsg:
 		m.loading = true
-		return m, doMonitorFetch(m.p, m.tok, m.activeTunnelID())
+		return m, tea.Batch(m.spin.Tick, doMonitorFetch(m.p, m.tok, m.activeTunnelID()))
 	case monitorRefreshMsg:
 		m.loading = false
 		if v.err != nil {
