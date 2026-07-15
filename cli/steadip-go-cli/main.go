@@ -1992,10 +1992,12 @@ func fmtLogTime(s string) string {
 	return s
 }
 
-// embeddedDateTimeRe matches a YYYY-MM-DD[T ]HH:MM:SS timestamp (with
-// optional fractional seconds and timezone) so it can be stripped out of log
-// bodies that already repeat the timestamp we show in the first column.
-var embeddedDateTimeRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?`)
+// embeddedDateTimeRe matches a YYYY-MM-DD[T ]HH:MM:SS or YYYY/MM/DD HH:MM:SS
+// timestamp (with optional fractional seconds and timezone) so it can be
+// stripped out of log bodies that already repeat the timestamp we show in
+// the first column. The slash-separated form is Go's standard "log" package
+// default format, which shows up in frpc's error logs.
+var embeddedDateTimeRe = regexp.MustCompile(`\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?`)
 
 func stripEmbeddedDateTime(s string) string {
 	s = embeddedDateTimeRe.ReplaceAllString(s, "")
