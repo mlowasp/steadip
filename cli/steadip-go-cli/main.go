@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1976,7 +1977,7 @@ func makeScrollbar(total, visible, scrollUp int) []string {
 
 func fmtLogTime(s string) string {
 	if n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil {
-		return time.Unix(n, 0).Format("15:04:05")
+		return time.Unix(n, 0).Format("2006-01-02 15:04:05")
 	}
 	for _, layout := range []string{
 		"2006-01-02 15:04:05",
@@ -1985,10 +1986,20 @@ func fmtLogTime(s string) string {
 		"2006-01-02T15:04:05.999999999Z07:00",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.Format("15:04:05")
+			return t.Format("2006-01-02 15:04:05")
 		}
 	}
 	return s
+}
+
+// embeddedDateTimeRe matches a YYYY-MM-DD[T ]HH:MM:SS timestamp (with
+// optional fractional seconds and timezone) so it can be stripped out of log
+// bodies that already repeat the timestamp we show in the first column.
+var embeddedDateTimeRe = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?`)
+
+func stripEmbeddedDateTime(s string) string {
+	s = embeddedDateTimeRe.ReplaceAllString(s, "")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func fmtLogEntry(e LogEntry, maxWidth int) string {
@@ -2002,6 +2013,7 @@ func fmtLogEntry(e LogEntry, maxWidth int) string {
 		}
 		return r
 	}, e.Data)
+	data = stripEmbeddedDateTime(data)
 	prefix := ts
 	if e.Gateway != "" {
 		prefix += "  " + e.Gateway
@@ -2021,6 +2033,7 @@ func fmtLogEntryRaw(e LogEntry) string {
 		}
 		return r
 	}, e.Data)
+	data = stripEmbeddedDateTime(data)
 	prefix := ts
 	if e.Gateway != "" {
 		prefix += "  " + e.Gateway
