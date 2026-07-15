@@ -805,11 +805,36 @@ type model struct {
 	launchMonitor             bool
 	logsLines                 []string
 	logsScrollV, logsScrollH  int
+	stLoggedIn, stManual, stAuto, stDaemon bool
 }
 
 type doneMsg struct {
 	title, body string
 	err         error
+}
+
+type statusMsg struct {
+	loggedIn, manual, auto, daemon bool
+}
+
+type statusTickMsg struct{}
+
+// refreshStatus runs the (potentially slow, subprocess-based) status checks
+// off the render path. On Windows these shell out to powershell.exe, which is
+// too slow to call synchronously from View() on every frame.
+func refreshStatus(p Paths) tea.Cmd {
+	return func() tea.Msg {
+		loggedIn := false
+		if t, err := token(p); err == nil && t != "" {
+			loggedIn = true
+		}
+		return statusMsg{
+			loggedIn: loggedIn,
+			manual:   manualRunning(p),
+			auto:     autoEnabled(p),
+			daemon:   daemonActive(p),
+		}
+	}
 }
 
 type loginCodeMsg struct {
@@ -868,7 +893,7 @@ func newModel(p Paths) model {
 	return model{p: p, spin: s, screen: home, width: 100, height: 32, reloginInput: ti}
 }
 
-func (m model) Init() tea.Cmd { return m.spin.Tick }
+func (m model) Init() tea.Cmd { return tea.Batch(m.spin.Tick, refreshStatus(m.p)) }
 
 func loginStart(p Paths) tea.Cmd {
 	return func() tea.Msg {
@@ -996,7 +1021,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.screen = home
 			m.err = ""
 			m.result = ""
-			return m, nil
+			return m, refreshStatus(m.p)
 		case "up", "k":
 			if m.screen == home && m.cursor > 0 {
 				m.cursor--
@@ -1033,7 +1058,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = ""
 			m.result = v.body
 		}
+		return m, refreshStatus(m.p)
+
+	case statusMsg:
+		m.stLoggedIn, m.stManual, m.stAuto, m.stDaemon = v.loggedIn, v.manual, v.auto, v.daemon
+		if m.screen == home {
+			return m, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return statusTickMsg{} })
+		}
 		return m, nil
+
+	case statusTickMsg:
+		if m.screen != home {
+			return m, nil
+		}
+		return m, refreshStatus(m.p)
 
 	case loginCodeMsg:
 		if v.err != nil {
@@ -1356,7 +1394,7 @@ func (m model) viewHome() string {
 	leftPanel := panelStyle.Width(menuW - 6).Render(strings.Join(menuLines, "\n"))
 
 	divLine := lipgloss.NewStyle().Foreground(border).Render(strings.Repeat("━", statusW-10))
-	statusContent := titleStyle.Render("// STATUS") + "\n\n" + statusMini(m.p) +
+	statusContent := titleStyle.Render("// STATUS") + "\n\n" + statusMiniVals(m.stLoggedIn, m.stManual, m.stAuto, m.stDaemon) +
 		"\n\n" + divLine +
 		"\n" + subtle.Render("Dashboard") +
 		"\n" + lipgloss.NewStyle().Foreground(cyan).Render(dashboardURL)
@@ -1430,20 +1468,23 @@ func (m model) viewReloginModal() string {
 }
 
 func statusMini(p Paths) string {
+	loggedIn := false
+	if t, err := token(p); err == nil && t != "" {
+		loggedIn = true
+	}
+	return statusMiniVals(loggedIn, manualRunning(p), autoEnabled(p), daemonActive(p))
+}
+
+// statusMiniVals renders the status panel from already-known values. Kept
+// separate from statusMini so View() can use cached state instead of shelling
+// out to check process/service status on every frame.
+func statusMiniVals(loggedIn, manual, auto, daemon bool) string {
 	dot := func(active bool) string {
 		if active {
 			return lipgloss.NewStyle().Foreground(green).Render("●")
 		}
 		return lipgloss.NewStyle().Foreground(red).Render("●")
 	}
-
-	loggedIn := false
-	if t, err := token(p); err == nil && t != "" {
-		loggedIn = true
-	}
-	manual := manualRunning(p)
-	auto := autoEnabled(p)
-	daemon := daemonActive(p)
 
 	labelSt := lipgloss.NewStyle().Foreground(muted)
 	valSt := lipgloss.NewStyle().Foreground(white)
