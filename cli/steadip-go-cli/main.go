@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.1"
+	version         = "0.2.2"
 	frpVersion      = "0.70.1"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
