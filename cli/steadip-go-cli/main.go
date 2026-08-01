@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.4"
+	version         = "0.2.5"
 	frpVersion      = "0.70.1"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
@@ -1573,7 +1573,6 @@ func scrub(s string) string {
 type MonitorTunnel struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
-	Type     string  `json:"type"`
 	Domain   string  `json:"subdomain"`
 	LastPing string  `json:"last_ping_timestamp"`
 	UserID   string  `json:"user_id"`
@@ -2149,22 +2148,20 @@ func (m monitorModel) View() string {
 	out = append(out, mSepPane(w, "TUNNELS", m.focusedPane == 0))
 
 	const (
-		nameW       = 18
-		typeW       = 6
+		nameW       = 24
 		statusW     = 10
 		latW        = 8
 		throughputW = 10
 		cursorW     = 2
 	)
 	// 5 spaces separate the 6 columns, plus cursor prefix column
-	domainW := contentW - cursorW - nameW - typeW - statusW - latW - throughputW - 5
+	domainW := contentW - cursorW - nameW - statusW - latW - throughputW - 5
 	if domainW < 10 {
 		domainW = 10
 	}
 
 	colHdr := strings.Repeat(" ", cursorW) +
 		mPad(subtle.Render("NAME"), nameW) + " " +
-		mPad(subtle.Render("TYPE"), typeW) + " " +
 		mPad(subtle.Render("DOMAIN"), domainW) + " " +
 		mPad(subtle.Render("STATUS"), statusW) + " " +
 		mPad(subtle.Render("LATENCY"), latW) + " " +
@@ -2211,7 +2208,6 @@ func (m monitorModel) View() string {
 
 		row := cur +
 			mPad(mTrunc(t.Name, nameW-1), nameW) + " " +
-			mPad(mTrunc(t.Type, typeW-1), typeW) + " " +
 			mPad(mTrunc(t.Domain+".steadip.com", domainW-1), domainW) + " " +
 			mPad(dotSt+" "+stSt, statusW) + " " +
 			mPad(lat, latW) + " " +
