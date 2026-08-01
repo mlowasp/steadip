@@ -2472,6 +2472,11 @@ func nonInteractive(args []string, p Paths) int {
 			return fail(err)
 		}
 		return 0
+	case "version", "-v", "--version":
+		fmt.Println("steadip version " + version)
+		return 0
+	case "update":
+		return cliUpdate()
 	case "help", "-h", "--help":
 		printHelp()
 		return 0
@@ -2499,6 +2504,8 @@ Usage:
   steadip monitor         Live tunnel monitor TUI
   steadip config          Show frpc config with secrets hidden
   steadip logout          Stop tunnels and remove local token
+  steadip version         Show CLI version
+  steadip update          Check for and install the latest version
 `)
 }
 
@@ -2560,6 +2567,31 @@ func selfUpdate() {
 		os.Exit(1)
 	}
 	os.Exit(0)
+}
+
+// cliUpdate is the user-invoked counterpart to checkForUpdate: it always
+// reports what it finds (including a network failure) instead of failing
+// silently, since the user explicitly asked to check.
+func cliUpdate() int {
+	fmt.Println("Checking for updates...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	latest, err := latestVersion(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), err)
+		return 1
+	}
+	if latest == "" {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), "could not determine latest version")
+		return 1
+	}
+	if latest == version {
+		fmt.Println(okStyle.Render("Already up to date (" + version + ")."))
+		return 0
+	}
+	fmt.Println(warnStyle.Render(fmt.Sprintf("Updating %s -> %s...", version, latest)))
+	selfUpdate()
+	return 0
 }
 
 // checkForUpdate compares the running version against versionBase and, on
