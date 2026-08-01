@@ -2516,7 +2516,71 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// latestVersion fetches the current published version string from versionBase.
+func latestVersion(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionBase, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+// selfUpdate re-invokes the official install script for the current OS,
+// which downloads and replaces the running binary, then exits the process.
+func selfUpdate() {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("sh", "-c", "curl -fsSL https://steadip.com/install-linux.sh | sh")
+	case "darwin":
+		cmd = exec.Command("sh", "-c", "curl -fsSL https://steadip.com/install-macos.sh | sh")
+	case "windows":
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-Command", "irm https://steadip.com/install-windows.ps1 | iex")
+	default:
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error:"), "unsupported OS for self-update:", runtime.GOOS)
+		os.Exit(1)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, errStyle.Render("Update failed:"), err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// checkForUpdate compares the running version against versionBase and, on
+// mismatch, replaces the installed binary via the OS install script. Network
+// failures are ignored so offline use is unaffected.
+func checkForUpdate() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	latest, err := latestVersion(ctx)
+	if err != nil || latest == "" {
+		return
+	}
+	if latest != version {
+		fmt.Println(warnStyle.Render(fmt.Sprintf("A new version of SteadIP is available: %s (current: %s)", latest, version)))
+		fmt.Println("Updating...")
+		selfUpdate()
+	}
+}
+
 func main() {
+	checkForUpdate()
 	p := paths()
 	if err := ensureDirs(p); err != nil {
 		fmt.Fprintln(os.Stderr, err)
