@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.2"
+	version         = "0.2.3"
 	frpVersion      = "0.70.1"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
@@ -2524,11 +2524,18 @@ func maxInt(a, b int) int {
 }
 
 // latestVersion fetches the current published version string from versionBase.
+// versionBase is served via GitHub's CDN, which keys its cache on the full
+// URL rather than request headers, so a cache-busting query parameter is
+// required to guarantee a fresh read; the no-cache headers are added as a
+// second line of defense against caching proxies in between.
 func latestVersion(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionBase, nil)
+	url := fmt.Sprintf("%s?cb=%d-%d", versionBase, time.Now().UnixNano(), os.Getpid())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Cache-Control", "no-cache, no-store")
+	req.Header.Set("Pragma", "no-cache")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err

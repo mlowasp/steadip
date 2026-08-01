@@ -31,11 +31,17 @@ detect_arch() {
 download() {
   url="$1"
   dest="$2"
+  cb="$(date +%s%N 2>/dev/null || date +%s)-$$"
+  sep="?"
+  case "$url" in
+    *\?*) sep="&" ;;
+  esac
+  url="${url}${sep}cb=${cb}"
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$dest"
+    curl -fsSL -H "Cache-Control: no-cache, no-store" -H "Pragma: no-cache" "$url" -o "$dest"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q "$url" -O "$dest"
+    wget -q --no-cache --header="Cache-Control: no-cache, no-store" --header="Pragma: no-cache" "$url" -O "$dest"
   else
     fail "curl or wget is required"
   fi

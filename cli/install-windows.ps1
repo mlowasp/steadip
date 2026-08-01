@@ -85,7 +85,8 @@ function Add-ToUserPath($Dir) {
 function Main {
     $arch = Get-SteadIPArch
     $binary = "steadip-windows-$arch.exe"
-    $url = "$BaseUrl/$binary"
+    $cacheBuster = [System.Guid]::NewGuid().ToString()
+    $url = "$BaseUrl/$binary`?cb=$cacheBuster"
 
     Write-Info "Installing SteadIP TUI CLI"
     Write-Info "Platform: Windows/$arch"
@@ -97,7 +98,11 @@ function Main {
     $tmp = Join-Path $env:TEMP ("steadip-" + [System.Guid]::NewGuid().ToString() + ".exe")
 
     try {
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+        $noCacheHeaders = @{
+            "Cache-Control" = "no-cache, no-store"
+            "Pragma" = "no-cache"
+        }
+        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -Headers $noCacheHeaders
         Move-Item -Force $tmp $BinPath
     } finally {
         if (Test-Path $tmp) {
