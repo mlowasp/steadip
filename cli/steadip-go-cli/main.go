@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	version         = "0.2.0"
-	frpVersion      = "0.70.0"
+	version         = "0.2.1"
+	frpVersion      = "0.70.1"
 	apiBase         = "https://steadip.com/api"
+	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
 	dashboardURL    = "https://steadip.com"
 	windowsTaskName = "SteadIP Tunnel Client"
 )

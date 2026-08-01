@@ -40,6 +40,7 @@ Free accounts are intended for HTTP/HTTPS tunnels.
 
 - Free HTTP/HTTPS tunnels
 - Automatic HTTPS
+- Mesh networking (failover/load-balancing)
 - Random SteadIP subdomain
 - Works behind NAT and CGNAT
 - Dashboard-managed tunnel configuration
@@ -158,6 +159,12 @@ steadip up
 ```
 
 Your local service is now reachable through the public SteadIP URL.
+
+---
+
+## Documentation
+
+[You can read the online documentation here.](https://steadip.com/doc)
 
 ---
 
