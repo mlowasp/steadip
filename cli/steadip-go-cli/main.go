@@ -29,13 +29,15 @@ import (
 )
 
 const (
-	version         = "0.2.5"
+	version         = "0.2.6"
 	frpVersion      = "0.70.1"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
 	dashboardURL    = "https://steadip.com"
 	windowsTaskName = "SteadIP Tunnel Client"
 )
+
+var userAgent = fmt.Sprintf("%s/%s", windowsTaskName, version)
 
 type Paths struct {
 	BinDir, ConfigDir, StateDir         string
@@ -150,6 +152,7 @@ func postJSON(ctx context.Context, path, token string, payload any, out any) (in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -175,6 +178,7 @@ func getJSON(ctx context.Context, path, token string, out any) (int, []byte, err
 		return 0, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -495,6 +499,7 @@ func installFrpc(ctx context.Context, p Paths) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -2472,7 +2477,7 @@ func nonInteractive(args []string, p Paths) int {
 		fmt.Println("steadip version " + version)
 		return 0
 	case "update":
-		return cliUpdate()
+		return cliUpdate(p)
 	case "help", "-h", "--help":
 		printHelp()
 		return 0
@@ -2532,6 +2537,7 @@ func latestVersion(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Cache-Control", "no-cache, no-store")
 	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
@@ -2575,7 +2581,7 @@ func selfUpdate() {
 // cliUpdate is the user-invoked counterpart to checkForUpdate: it always
 // reports what it finds (including a network failure) instead of failing
 // silently, since the user explicitly asked to check.
-func cliUpdate() int {
+func cliUpdate(p Paths) int {
 	fmt.Println("Checking for updates...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2593,6 +2599,9 @@ func cliUpdate() int {
 		return 0
 	}
 	fmt.Println(warnStyle.Render(fmt.Sprintf("Updating %s -> %s...", version, latest)))
+	// Remove the installed frpc binary so the next run re-downloads it,
+	// picking up any frpc version bump that shipped alongside this release.
+	_ = os.Remove(p.Frpc)
 	selfUpdate()
 	return 0
 }
