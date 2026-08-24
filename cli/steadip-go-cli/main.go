@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.9"
+	version         = "0.2.10"
 	frpVersion      = "0.71.0"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
@@ -2613,6 +2613,15 @@ func cliUpdate(p Paths) int {
 
 	if err := os.Remove(p.Frpc); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, warnStyle.Render("Warning:"), "could not remove old frpc binary:", err)
+	}
+
+	if _, err := os.Stat(p.Frpc); err == nil {
+		if err := os.Chmod(p.Frpc, 0666); err != nil {
+			fmt.Fprintln(os.Stderr, warnStyle.Render("Warning:"), "could not chmod old frpc binary:", err)
+		}
+		if err := os.Remove(p.Frpc); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, warnStyle.Render("Warning:"), "could not force-remove old frpc binary:", err)
+		}
 	}
 
 	selfUpdate()
