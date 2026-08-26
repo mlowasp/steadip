@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.12"
+	version         = "0.2.13"
 	frpVersion      = "0.71.0"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
@@ -2470,7 +2470,13 @@ func nonInteractive(args []string, p Paths) int {
 		cmd := exec.Command(p.Frpc, "-c", p.Config)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := cmd.Start(); err != nil {
+			return fail(err)
+		}
+		_ = os.WriteFile(p.PID, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
+		err := cmd.Wait()
+		_ = os.Remove(p.PID)
+		if err != nil {
 			return fail(err)
 		}
 		return 0
