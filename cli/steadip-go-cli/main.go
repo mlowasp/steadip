@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version         = "0.2.11"
+	version         = "0.2.12"
 	frpVersion      = "0.71.0"
 	apiBase         = "https://steadip.com/api"
 	versionBase     = "https://raw.githubusercontent.com/mlowasp/steadip/main/cli/steadip-go-cli/dist/current_version"
@@ -725,6 +725,7 @@ func enableAuto(p Paths) error {
 	if err != nil {
 		return err
 	}
+	stopManual(p)
 	switch runtime.GOOS {
 	case "linux":
 		_ = os.MkdirAll(filepath.Dir(p.ServiceFile), 0o755)
@@ -1151,7 +1152,7 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 			if err := syncConfig(ctx, m.p); err != nil {
 				return "", err
 			}
-			if daemonActive(m.p) {
+			if autoEnabled(m.p) {
 				return "Daemon restarted with latest config.", restartDaemon(m.p)
 			}
 			return "Tunnels started.\n\nLogs:\n" + m.p.Log, startManual(m.p)
@@ -1159,7 +1160,7 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 	case "down":
 		return work("Down", func() (string, error) {
 			stopManual(m.p)
-			if daemonActive(m.p) {
+			if autoEnabled(m.p) {
 				stopDaemon(m.p)
 			}
 			return "Tunnels stopped.", nil
@@ -1202,7 +1203,7 @@ func (m model) run(key string) (tea.Model, tea.Cmd) {
 	case "logout":
 		return work("Logout", func() (string, error) {
 			stopManual(m.p)
-			if daemonActive(m.p) {
+			if autoEnabled(m.p) {
 				stopDaemon(m.p)
 			}
 			_ = os.Remove(m.p.Token)
@@ -2409,7 +2410,7 @@ func nonInteractive(args []string, p Paths) int {
 		if err := syncConfig(ctx, p); err != nil {
 			return fail(err)
 		}
-		if daemonActive(p) {
+		if autoEnabled(p) {
 			if err := restartDaemon(p); err != nil {
 				return fail(err)
 			}
@@ -2421,7 +2422,7 @@ func nonInteractive(args []string, p Paths) int {
 		return ok("Tunnels started")
 	case "down":
 		stopManual(p)
-		if daemonActive(p) {
+		if autoEnabled(p) {
 			stopDaemon(p)
 		}
 		return ok("Tunnels stopped")
@@ -2453,7 +2454,7 @@ func nonInteractive(args []string, p Paths) int {
 		return 0
 	case "logout":
 		stopManual(p)
-		if daemonActive(p) {
+		if autoEnabled(p) {
 			stopDaemon(p)
 		}
 		_ = os.Remove(p.Token)
