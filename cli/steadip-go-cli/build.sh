@@ -6,6 +6,9 @@ GOOS=linux GOARCH=amd64 go build -o dist/steadip-linux-amd64 .
 # Linux arm64
 GOOS=linux GOARCH=arm64 go build -o dist/steadip-linux-arm64 .
 
+# Linux arm (32-bit)
+GOOS=linux GOARCH=arm GOARM=7 go build -o dist/steadip-linux-arm .
+
 # macOS Intel
 GOOS=darwin GOARCH=amd64 go build -o dist/steadip-darwin-amd64 .
 

@@ -24,6 +24,7 @@ detect_arch() {
   case "$arch" in
     x86_64|amd64) printf "amd64" ;;
     aarch64|arm64) printf "arm64" ;;
+    armv7l|armv6l|armv5*|arm) printf "arm" ;;
     *) fail "Unsupported CPU architecture: $arch" ;;
   esac
 }
@@ -61,6 +62,7 @@ main() {
   arch="$(detect_arch)"
   if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux/files/usr" ]; then
     platform="android"
+    [ "$arch" = "arm" ] && fail "32-bit ARM is not supported on Android; only arm64 builds are provided."
   else
     platform="linux"
   fi
